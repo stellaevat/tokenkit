@@ -1,4 +1,5 @@
 # Character mapping dictionaries
+EXPAND_INPUT_IDS_MAX_LENGTH = 16
 CHARS_TO_BYTES = {
     "Ā": 0,
     "ā": 1,
@@ -258,3 +259,4 @@ CHARS_TO_BYTES = {
     "ÿ": 255,
 }
 BYTES_TO_CHARS = {v: k for k, v in CHARS_TO_BYTES.items()}
+MAX_CHARS_PER_TOKEN = 16

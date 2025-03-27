@@ -1,0 +1,12 @@
+ignore_normalizer: false
+combine_strategy: "mean_prob"
+pad_to_multiple_of: 128
+
+eval:
+  tokens_per_batch: 2048
+  output: outputs/eval
+
+defaults:
+  - _self_
+  - eval: default
+  - models: llama_qwen

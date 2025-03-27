@@ -12,9 +12,22 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from tokenkit.constants import CHARS_TO_BYTES
 from tokenkit.model_kinds import BaseModelKind, get_model_kind_cls
-from tokenkit.utils import fix_postprocessor_data
 
 logger = logging.getLogger(__name__)
+
+
+def fix_postprocessor_data(data, vocab):
+    if data["type"] == "TemplateProcessing":
+        for k in data["special_tokens"].keys():
+            tokens = data["special_tokens"][k]["tokens"]
+            ids = [vocab[t] for t in tokens]
+            data["special_tokens"][k]["ids"] = ids
+    elif data["type"] == "RobertaProcessing":
+        data["sep"][1] = vocab[data["sep"][0]]
+        data["cls"][1] = vocab[data["cls"][0]]
+    elif data["type"] == "Sequence":
+        for postprocessor in data["processors"]:
+            fix_postprocessor_data(postprocessor, vocab)
 
 
 def to_byte_level_tokenizer(
@@ -84,6 +97,19 @@ class ByteifyTokenizer:
         self.tokenizer = tokenizer
         self.model_kind_cls = model_kind_cls
 
+        pad_token = next(
+            token
+            for token in [
+                self.tokenizer.pad_token,
+                self.tokenizer.unk_token,
+                self.tokenizer.eos_token,
+                self.tokenizer.bos_token,
+            ]
+            if token is not None
+        )
+        self.tokenizer.pad_token = pad_token
+        self.tokenizer.padding_side = "right"
+
         self.vocab = {
             self.model_kind_cls.byte_fallback_fn(k): v
             for k, v in self.tokenizer.vocab.items()
@@ -98,11 +124,48 @@ class ByteifyTokenizer:
         else:
             return [self.inv_vocab[id] for id in ids]
 
+    def convert_tokens_to_ids(
+        self, tokens: Union[str, List[str]]
+    ) -> Union[int, List[int]]:
+        if isinstance(tokens, str):
+            return self.vocab[tokens]
+        else:
+            return [self.vocab[token] for token in tokens]
+
     def get_vocab(self) -> Dict[str, int]:
         return self.vocab
 
     def __call__(self, *args, **kwargs):
-        return self.tokenizer(*args, **kwargs)
+        kwargs.pop("add_special_tokens", None)
+
+        return self.tokenizer(*args, **kwargs, add_special_tokens=False)
+
+    def __len__(self):
+        return len(self.tokenizer)
+
+    @property
+    def added_tokens_encoder(self):
+        return self.tokenizer.added_tokens_encoder
+
+    @property
+    def all_special_tokens(self):
+        return self.model_kind_cls.special_tokens
+
+    @property
+    def all_special_ids(self):
+        return self.convert_tokens_to_ids(self.all_special_tokens)
+
+    @property
+    def pad_token_id(self):
+        return self.tokenizer.pad_token_id
+
+    @property
+    def bos_token_id(self):
+        return self.tokenizer.bos_token_id
+
+    @property
+    def eos_token_id(self):
+        return self.tokenizer.eos_token_id
 
     def encode(self, *args, **kwargs):
         return self.tokenizer.encode(*args, **kwargs)

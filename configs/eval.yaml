@@ -1,0 +1,11 @@
+ignore_normalizer: false
+use_cpu: false
+expand_input_ids: false
+pad_to_multiple_of: 128
+
+eval:
+  output: outputs/eval
+
+defaults:
+  - _self_
+  - eval: default

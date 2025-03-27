@@ -1,24 +1,23 @@
-import copy
-import json
 import logging
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from pprint import pprint
-from tempfile import NamedTemporaryFile
 
 import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 import regex as re
-import tokenizers
 import wandb
 from flax import traverse_util
-from google.cloud import storage
 from scipy import sparse
-from tokenizers import Tokenizer
 from tqdm.auto import tqdm as raw_tqdm
+from transformers import AutoTokenizer
+
+from tokenkit import constants
+from tokenkit.byteify import load_byteify_tokenizer
 
 tqdm = partial(raw_tqdm, dynamic_ncols=True, disable=jax.process_index() != 0)
 
@@ -29,21 +28,6 @@ def log(data, step, **kwargs):
     pprint({**data, "_step": step})
     if jax.process_index() == 0:
         wandb.log(data, step=step, **kwargs)
-
-
-def ensure_pad_token_set(tokenizer):
-    pad_token = next(
-        token
-        for token in [
-            tokenizer.pad_token,
-            tokenizer.unk_token,
-            tokenizer.eos_token,
-            tokenizer.bos_token,
-        ]
-        if token is not None
-    )
-    tokenizer.pad_token = pad_token
-    tokenizer.padding_side = "right"
 
 
 def keystr(x):
@@ -84,20 +68,6 @@ def get_space_mask(tokenizer):
             space_mask[i] = True
 
     return space_mask
-
-
-def fix_postprocessor_data(data, vocab):
-    if data["type"] == "TemplateProcessing":
-        for k in data["special_tokens"].keys():
-            tokens = data["special_tokens"][k]["tokens"]
-            ids = [vocab[t] for t in tokens]
-            data["special_tokens"][k]["ids"] = ids
-    elif data["type"] == "RobertaProcessing":
-        data["sep"][1] = vocab[data["sep"][0]]
-        data["cls"][1] = vocab[data["cls"][0]]
-    elif data["type"] == "Sequence":
-        for postprocessor in data["processors"]:
-            fix_postprocessor_data(postprocessor, vocab)
 
 
 def expand_input_ids(input_ids_new, tokenizer, original_vocab, use_heuristic=False):
@@ -329,47 +299,9 @@ def get_surface_form_matrix(
     return surface_form_matrix, n_truncated
 
 
-DEFAULT_SPLIT_REGEX = (
-    r"'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}\p{M}]+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
-)
-MAX_CHARS_PER_TOKEN = 16
-# assumes byte pretokenization
-
-
-def download_from_gcs(bucket_name, source_blob_name, destination_file_name):
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(source_blob_name)
-    blob.download_to_filename(destination_file_name)
-    print(
-        f"Downloaded {source_blob_name} from bucket {bucket_name} to {destination_file_name}"
-    )
-
-
-def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_filename(source_file_name)
-    print(
-        f"Uploaded {source_file_name} to bucket {bucket_name} as {destination_blob_name}"
-    )
-
-
-def is_gcs_path(path):
-    return path.startswith("gs://")
-
-
-def parse_gcs_path(gcs_path):
-    path_parts = gcs_path[len("gs://") :].split("/", 1)
-    bucket_name = path_parts[0]
-    blob_name = path_parts[1] if len(path_parts) > 1 else ""
-    return bucket_name, blob_name
-
-
 def preprocess_messages(messages):
     # convert messages format to prompt with chat template
-    prompt = ""
+    prompt = "<|<bos>|>"
     for message in messages:
         role_tag = {
             "user": "<|<user_name>|>",
@@ -377,7 +309,9 @@ def preprocess_messages(messages):
             "system": "<|<system_name>|>",
         }[message["role"]]
 
-        prompt += f"<|<bos>|><|<start_header>|>{role_tag}<|<end_header>|>{message['content']}<|<eot>|>"
+        prompt += (
+            f"<|<start_header>|>{role_tag}<|<end_header>|>{message['content']}<|<eot>|>"
+        )
     return prompt
 
 
@@ -403,12 +337,12 @@ def preprocess_prompt(prompt, chat_template_mode):
     return prompt
 
 
-def encode_prompt(prompt, tokenizer, replacements, max_length=None):
+def encode_prompt(prompt, tokenizer, max_length=None):
     tokens = []
     regular_token_indices = []
 
     if max_length is not None:
-        prompt = prompt[: MAX_CHARS_PER_TOKEN * max_length]
+        prompt = prompt[: constants.MAX_CHARS_PER_TOKEN * max_length]
 
     added_token_starts = set(x[0] for x in tokenizer.added_tokens_encoder.keys())
 
@@ -416,23 +350,16 @@ def encode_prompt(prompt, tokenizer, replacements, max_length=None):
         if chunk in tokenizer.added_tokens_encoder:
             tokens.append(chunk)
             regular_token_indices.append(-1)
-        elif chunk in replacements:
-            if replacements[chunk] is not None:
-                tokens.extend(replacements[chunk])
-                regular_token_indices.extend([-1] * len(replacements[chunk]))
-        else:
-            chunk_pretokens = [
-                x[0]
-                for x in tokenizer.backend_tokenizer.pre_tokenizer.pre_tokenize_str(
-                    chunk
+        elif chunk in tokenizer.model_kind_cls.replacements:
+            if tokenizer.model_kind_cls.replacements[chunk] is not None:
+                tokens.extend(tokenizer.model_kind_cls.replacements[chunk])
+                regular_token_indices.extend(
+                    [-1] * len(tokenizer.model_kind_cls.replacements[chunk])
                 )
-            ]
-            chunk_tokens = [
-                t.value
-                for pretoken in chunk_pretokens
-                for t in tokenizer.backend_tokenizer.model.tokenize(pretoken)
-            ]
-
+        else:
+            chunk_tokens = tokenizer.convert_ids_to_tokens(
+                tokenizer(chunk, add_special_tokens=False)["input_ids"]
+            )
             tokens.extend(chunk_tokens)
 
             try:
@@ -451,7 +378,11 @@ def encode_prompt(prompt, tokenizer, replacements, max_length=None):
 
     while i < len(prompt):
         try:
-            key = next(key for key in replacements.keys() if prompt[i:].startswith(key))
+            key = next(
+                key
+                for key in tokenizer.model_kind_cls.replacements.keys()
+                if prompt[i:].startswith(key)
+            )
         except StopIteration:
             key = None
 
@@ -490,24 +421,6 @@ def encode_prompt(prompt, tokenizer, replacements, max_length=None):
         return tokens[:max_length], regular_token_indices[:max_length]
     else:
         return tokens, regular_token_indices
-
-
-def get_num_layers(config):
-    if hasattr(config, "num_hidden_layers"):
-        return config.num_hidden_layers
-    elif hasattr(config, "n_layer"):  # gpt2
-        return config.n_layer
-    else:
-        raise ValueError("Could not determine number of layers from config")
-
-
-def set_num_layers(config, num_layers):
-    if hasattr(config, "num_hidden_layers"):
-        config.num_hidden_layers = num_layers
-    elif hasattr(config, "n_layer"):  # gpt2
-        config.n_layer = num_layers
-    else:
-        raise ValueError("Could not determine number of layers from config")
 
 
 def make_hashable(obj):
@@ -610,3 +523,34 @@ def get_side_path_mappings(
         raise ValueError(f"Unknown side path mapping mode: {mode}")
 
     return student_mapping, teacher_mapping
+
+
+@pytest.mark.parametrize(
+    "tokenizer_name",
+    [
+        "google/gemma-2-2b-it:source=Gemma2",
+        "Qwen/Qwen2-1.5B-Instruct:source=Qwen2",
+        "meta-llama/Llama-3.1-8B-Instruct:source=Llama3",
+    ],
+)
+def test_encode_prompt(tokenizer_name):
+    tokenizer = load_byteify_tokenizer(tokenizer_name)
+    comparison_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name.split(":")[0])
+
+    messages = [
+        {"role": "user", "content": "Hello, world!"},
+        {"role": "assistant", "content": "Hello, user!"},
+    ]
+
+    tokens, _ = encode_prompt(preprocess_messages(messages), tokenizer)
+    comparison_token_ids = comparison_tokenizer.apply_chat_template(
+        messages, use_system_prompt=False
+    )
+
+    tokens = comparison_tokenizer.convert_ids_to_tokens(
+        tokenizer.convert_tokens_to_ids(tokens)
+    )
+    comparison_tokens = comparison_tokenizer.convert_ids_to_tokens(comparison_token_ids)
+
+    # apply_chat_template may inject an (undesired) system prompt, so the best we can do is to check the suffix (and skip first token since it may be bos)
+    assert " ".join(comparison_tokens).endswith(" ".join(tokens[1:]))

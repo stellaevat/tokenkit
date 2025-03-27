@@ -1,0 +1,6 @@
+- pretrained_model_name_or_path: "benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer"
+  tokenizer_name: "benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer:source=Qwen2"
+  add_bos: true
+- pretrained_model_name_or_path: "benjamin/Qwen2.5-1.5B-Instruct-flax"
+  tokenizer_name: "Qwen/Qwen2-1.5B-Instruct:source=Qwen2"
+  add_bos: false

@@ -1,24 +1,24 @@
-from tqdm.auto import tqdm as raw_tqdm
+import copy
+import json
+import logging
+from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
+from pprint import pprint
+from tempfile import NamedTemporaryFile
+
+import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import copy
-import tokenizers
-from dataclasses import dataclass
-from pathlib import Path
-from flax import traverse_util
 import regex as re
-import logging
-import json
-from tokenizers import Tokenizer
-from tempfile import NamedTemporaryFile
+import tokenizers
 import wandb
-from pprint import pprint
+from flax import traverse_util
 from google.cloud import storage
-import flax
 from scipy import sparse
-
+from tokenizers import Tokenizer
+from tqdm.auto import tqdm as raw_tqdm
 
 tqdm = partial(raw_tqdm, dynamic_ncols=True, disable=jax.process_index() != 0)
 
@@ -72,191 +72,6 @@ def get_large_negative_number(dtype: jnp.dtype | np.dtype, module=jnp) -> jax.Ar
     return module.asarray(-0.7 * dtype_max, dtype=dtype)
 
 
-def normalize_special_tokens(
-    tokens, tokenizer, attention_mask, model_kind, special_tokens_mode
-):
-    normalized_tokens = []
-    special_tokens_mask = []
-
-    first_regular_token = True
-
-    special_tokens = set(get_special_tokens(model_kind)) | set(tokenizer.added_tokens_encoder.keys())
-
-    if "+" in special_tokens_mode:
-        special_tokens_mode, normalize_policy = special_tokens_mode.split("+")
-    else:
-        normalize_policy = None
-
-    if special_tokens_mode == "ignore_pad_bos":
-        bos_tokens = get_replacements(model_kind)["<|<bos>|>"]
-        assert bos_tokens is None or len(bos_tokens) == 1
-        bos_token = bos_tokens[0] if bos_tokens is not None else None
-
-    for token, m in zip(tokens, attention_mask):
-        if token in special_tokens:
-            # TODO: probably always ignore masked tokens and remove/refactor special_tokens_mode
-            if (
-                special_tokens_mode == "ignore"
-                or (special_tokens_mode == "ignore_pad" and not m)
-                or (
-                    special_tokens_mode == "ignore_pad_bos"
-                    and (not m or token == bos_token)
-                )
-            ):
-                normalized_token = ""
-                is_special = True
-            else:
-                if normalize_policy == "keep_literal":
-                    normalized_token = token
-                else:
-                    normalized_token = "<|<special_token>|>"
-                is_special = False
-        else:
-            # TODO: does this work?
-            if first_regular_token:
-                normalized_token = token.lstrip(
-                    "Ġ"
-                )  # to align tokenizers with/without prefix space
-                first_regular_token = False
-            else:
-                normalized_token = token
-            is_special = False
-
-        normalized_tokens.append(normalized_token)
-        special_tokens_mask.append(is_special)
-
-    return normalized_tokens, np.array(special_tokens_mask)
-
-
-def get_min_length_alignments(
-    input_ids_original,
-    input_ids_new,
-    tokenizer,
-    attention_mask_original=None,
-    attention_mask_new=None,
-    compute_alignment_matrices=False,
-    original_tokenizer=None,
-    model_kind_original=None,
-    model_kind_new=None,
-    special_tokens_mode="use",
-):
-    # TODO: potentially cleaner to have this required
-    if original_tokenizer is None:
-        original_tokenizer = tokenizer
-
-    if attention_mask_new is not None:
-        attention_mask_new = attention_mask_new.astype(bool)
-    if attention_mask_original is not None:
-        attention_mask_original = attention_mask_original.astype(bool)
-
-    alignments_mask = np.zeros(input_ids_new.shape, dtype=bool)
-    nonalignments_mask = np.zeros(input_ids_new.shape, dtype=bool)
-    all_cum_lengths_original = np.zeros(input_ids_original.shape, dtype=np.int32)
-    all_cum_lengths_new = np.zeros(input_ids_new.shape, dtype=np.int32)
-    mismatches = np.zeros(len(input_ids_new), dtype=bool)
-
-    if compute_alignment_matrices:
-        batch_size = input_ids_new.shape[0]
-        shared_length = min(input_ids_original.shape[1], input_ids_new.shape[1])
-        alignment_matrix_a = np.zeros(
-            (batch_size, input_ids_new.shape[1], shared_length), dtype=bool
-        )
-        alignment_matrix_b = np.zeros(
-            (batch_size, input_ids_original.shape[1], shared_length), dtype=bool
-        )
-    else:
-        alignment_matrix_a = alignment_matrix_b = None
-
-    for example_index in range(len(input_ids_original)):
-        tokens_original = original_tokenizer.convert_ids_to_tokens(
-            input_ids_original[example_index]
-        )
-        tokens_new = tokenizer.convert_ids_to_tokens(input_ids_new[example_index])
-        tokens_original, special_tokens_mask_original = normalize_special_tokens(
-            tokens_original,
-            original_tokenizer,
-            attention_mask_original[example_index],
-            model_kind=model_kind_original,
-            special_tokens_mode=special_tokens_mode,
-        )
-        tokens_new, special_tokens_mask_new = normalize_special_tokens(
-            tokens_new,
-            tokenizer,
-            attention_mask_new[example_index],
-            model_kind=model_kind_new,
-            special_tokens_mode=special_tokens_mode,
-        )
-
-        assert tokens_original[0].startswith(tokens_new[0]) or tokens_new[0].startswith(
-            tokens_original[0]
-        )
-
-        cum_lengths_original = np.cumsum([len(token) for token in tokens_original])
-        cum_lengths_new = np.cumsum([len(token) for token in tokens_new])
-
-        all_cum_lengths_original[example_index] = cum_lengths_original
-        all_cum_lengths_new[example_index] = cum_lengths_new
-
-        shared_length = min(cum_lengths_original[-1], cum_lengths_new[-1])
-
-        # find alignment of new tokens to original tokens
-        alignment_chunk_idx = 0
-        prev_i = i = 0
-        prev_j = j = 0
-
-        joined_original = "".join(tokens_original)
-        joined_new = "".join(tokens_new)
-
-        if not (joined_original.startswith(joined_new) or joined_new.startswith(
-            joined_original
-        )):
-            mismatches[example_index] = True
-
-        while i < len(cum_lengths_new) and j < len(cum_lengths_original):
-            if cum_lengths_new[i] == cum_lengths_original[j]:
-                i += 1
-                j += 1
-
-                if compute_alignment_matrices:
-                    alignment_matrix_a[example_index, prev_i:i, alignment_chunk_idx] = (
-                        True
-                    )
-                    alignment_matrix_b[example_index, prev_j:j, alignment_chunk_idx] = (
-                        True
-                    )
-
-                    alignment_chunk_idx += 1
-
-                if i - prev_i > 1:
-                    nonalignments_mask[example_index, prev_i:i] = True
-                else:
-                    alignments_mask[example_index, prev_i:i] = True
-
-                prev_i = i
-                prev_j = j
-            elif cum_lengths_new[i] < cum_lengths_original[j]:
-                i += 1
-            else:
-                j += 1
-
-        alignments_mask[example_index, special_tokens_mask_new] = False
-        nonalignments_mask[example_index, special_tokens_mask_new] = False
-
-        if compute_alignment_matrices:
-            alignment_matrix_a[example_index, special_tokens_mask_new, :] = False
-            alignment_matrix_b[example_index, special_tokens_mask_original, :] = False
-
-    return (
-        alignments_mask,
-        nonalignments_mask,
-        all_cum_lengths_original,
-        all_cum_lengths_new,
-        alignment_matrix_a,
-        alignment_matrix_b,
-        mismatches,
-    )
-
-
 def get_space_mask(tokenizer):
     space_mask = np.zeros(len(tokenizer), dtype=bool)
     tokens = tokenizer.convert_ids_to_tokens(np.arange(len(tokenizer)))
@@ -269,298 +84,6 @@ def get_space_mask(tokenizer):
             space_mask[i] = True
 
     return space_mask
-
-
-def get_space_alignments(
-    input_ids_original,
-    input_ids_new,
-    tokenizer,
-    attention_mask_original=None,
-    attention_mask_new=None,
-    compute_alignment_matrices=False,
-    original_tokenizer=None,
-    model_kind_original=None,
-    model_kind_new=None,
-    special_tokens_mode="use",
-):
-    # TODO: potentially cleaner to have this required
-    if original_tokenizer is None:
-        original_tokenizer = tokenizer
-
-    shared_length = min(input_ids_original.shape[1], input_ids_new.shape[1])
-
-    alignments_mask = np.zeros(input_ids_new.shape, dtype=bool)
-    nonalignments_mask = np.zeros(input_ids_new.shape, dtype=bool)
-    chunk_starts_with_space = np.zeros((len(input_ids_new), shared_length), dtype=bool)
-
-    if compute_alignment_matrices:
-        batch_size = input_ids_new.shape[0]
-        alignment_matrix_a = np.zeros(
-            (batch_size, input_ids_new.shape[1], shared_length), dtype=bool
-        )
-        alignment_matrix_b = np.zeros(
-            (batch_size, input_ids_original.shape[1], shared_length), dtype=bool
-        )
-    else:
-        alignment_matrix_a = alignment_matrix_b = None
-
-    for example_index in range(len(input_ids_original)):
-        tokens_original = original_tokenizer.convert_ids_to_tokens(
-            input_ids_original[example_index]
-        )
-        tokens_new = tokenizer.convert_ids_to_tokens(input_ids_new[example_index])
-        tokens_original, special_tokens_mask_original = normalize_special_tokens(
-            tokens_original,
-            original_tokenizer,
-            attention_mask_original[example_index],
-            model_kind=model_kind_original,
-            special_tokens_mode=special_tokens_mode,
-        )
-        tokens_new, special_tokens_mask_new = normalize_special_tokens(
-            tokens_new,
-            tokenizer,
-            attention_mask_new[example_index],
-            model_kind=model_kind_new,
-            special_tokens_mode=special_tokens_mode,
-        )
-
-        assert tokens_original[0].startswith(tokens_new[0]) or tokens_new[0].startswith(
-            tokens_original[0]
-        )
-
-        cum_lengths_original = np.cumsum([len(token) for token in tokens_original])
-        cum_lengths_new = np.cumsum([len(token) for token in tokens_new])
-
-        original_starts_with_space = np.array(
-            [len(token) > 0 and token[0] == "Ġ" for token in tokens_original]
-        )
-        new_starts_with_space = np.array(
-            [len(token) > 0 and token[0] == "Ġ" for token in tokens_new]
-        )
-
-        # find alignment of new tokens to original tokens
-        alignment_chunk_idx = 0
-        prev_i = i = 0
-        prev_j = j = 0
-
-        while i < len(cum_lengths_new) and j < len(cum_lengths_original):
-            if cum_lengths_new[i] == cum_lengths_original[j] and (
-                special_tokens_mask_new[i]
-                or (
-                    (
-                        i < len(new_starts_with_space) - 1
-                        and new_starts_with_space[i + 1]
-                    )
-                    and (
-                        j < len(original_starts_with_space) - 1
-                        and original_starts_with_space[j + 1]
-                    )
-                )
-            ):
-                i += 1
-                j += 1
-
-                assert (
-                    new_starts_with_space[prev_i] == original_starts_with_space[prev_j]
-                )
-                chunk_starts_with_space[example_index, alignment_chunk_idx] = (
-                    new_starts_with_space[prev_i]
-                )
-
-                if compute_alignment_matrices:
-                    alignment_matrix_a[example_index, prev_i:i, alignment_chunk_idx] = (
-                        True
-                    )
-                    alignment_matrix_b[example_index, prev_j:j, alignment_chunk_idx] = (
-                        True
-                    )
-
-                if i - prev_i > 1:
-                    nonalignments_mask[example_index, prev_i:i] = True
-                else:
-                    alignments_mask[example_index, prev_i:i] = True
-
-                alignment_chunk_idx += 1
-                prev_i = i
-                prev_j = j
-            elif cum_lengths_new[i] == cum_lengths_original[j]:
-                i += 1
-                j += 1
-            elif cum_lengths_new[i] < cum_lengths_original[j]:
-                i += 1
-            else:
-                j += 1
-
-        alignments_mask[example_index, special_tokens_mask_new] = False
-        nonalignments_mask[example_index, special_tokens_mask_new] = False
-
-        if compute_alignment_matrices:
-            alignment_matrix_a[example_index, special_tokens_mask_new, :] = False
-            alignment_matrix_b[example_index, special_tokens_mask_original, :] = False
-
-    return (
-        alignments_mask,
-        nonalignments_mask,
-        alignment_matrix_a,
-        alignment_matrix_b,
-        chunk_starts_with_space,
-    )
-
-
-def get_unbiased_alignments(
-    input_ids_original,
-    input_ids_new,
-    tokenizer,
-    pair_data,
-    bias_threshold,
-    attention_mask_original=None,
-    attention_mask_new=None,
-    compute_alignment_matrices=False,
-    original_tokenizer=None,
-    model_kind_original=None,
-    model_kind_new=None,
-    special_tokens_mode="use",
-):
-    (bias1_matrix, bias2_matrix, _, _) = pair_data
-
-    # TODO: potentially cleaner to have this required
-    if original_tokenizer is None:
-        original_tokenizer = tokenizer
-
-    shared_length = min(input_ids_original.shape[1], input_ids_new.shape[1])
-
-    alignments_mask = np.zeros(input_ids_new.shape, dtype=bool)
-    nonalignments_mask = np.zeros(input_ids_new.shape, dtype=bool)
-
-    if compute_alignment_matrices:
-        batch_size = input_ids_new.shape[0]
-        alignment_matrix_a = np.zeros(
-            (batch_size, input_ids_new.shape[1], shared_length), dtype=bool
-        )
-        alignment_matrix_b = np.zeros(
-            (batch_size, input_ids_original.shape[1], shared_length), dtype=bool
-        )
-    else:
-        alignment_matrix_a = alignment_matrix_b = None
-
-    teacher_length, student_length = bias1_matrix.shape
-
-    def is_unbiased(original_token_id, new_token_id):
-        # hacky, to handle <|<special_token>|> case
-        if original_token_id is None or new_token_id is None:
-            return True
-
-        return (
-            original_token_id >= teacher_length or new_token_id >= student_length
-        ) or (
-            bias1_matrix[original_token_id, new_token_id] <= bias_threshold
-            and bias2_matrix[original_token_id, new_token_id] <= bias_threshold
-        )
-
-    for example_index in range(len(input_ids_original)):
-        tokens_original = original_tokenizer.convert_ids_to_tokens(
-            input_ids_original[example_index]
-        )
-        tokens_new = tokenizer.convert_ids_to_tokens(input_ids_new[example_index])
-        tokens_original, special_tokens_mask_original = normalize_special_tokens(
-            tokens_original,
-            original_tokenizer,
-            attention_mask_original[example_index],
-            model_kind=model_kind_original,
-            special_tokens_mode=special_tokens_mode,
-        )
-        tokens_new, special_tokens_mask_new = normalize_special_tokens(
-            tokens_new,
-            tokenizer,
-            attention_mask_new[example_index],
-            model_kind=model_kind_new,
-            special_tokens_mode=special_tokens_mode,
-        )
-
-        assert tokens_original[0].startswith(tokens_new[0]) or tokens_new[0].startswith(
-            tokens_original[0]
-        )
-
-        cum_lengths_original = np.cumsum([len(token) for token in tokens_original])
-        cum_lengths_new = np.cumsum([len(token) for token in tokens_new])
-
-        # find alignment of new tokens to original tokens
-        alignment_chunk_idx = 0
-        prev_i = i = 0
-        prev_j = j = 0
-
-        while i < len(cum_lengths_new) and j < len(cum_lengths_original):
-            if cum_lengths_new[i] == cum_lengths_original[j] and (
-                special_tokens_mask_new[i]
-                or is_unbiased(
-                    original_tokenizer.convert_tokens_to_ids(tokens_original[j]),
-                    tokenizer.convert_tokens_to_ids(tokens_new[i]),
-                )
-            ):
-                i += 1
-                j += 1
-
-                if compute_alignment_matrices:
-                    alignment_matrix_a[example_index, prev_i:i, alignment_chunk_idx] = (
-                        True
-                    )
-                    alignment_matrix_b[example_index, prev_j:j, alignment_chunk_idx] = (
-                        True
-                    )
-
-                if i - prev_i > 1:
-                    nonalignments_mask[example_index, prev_i:i] = True
-                else:
-                    alignments_mask[example_index, prev_i:i] = True
-
-                alignment_chunk_idx += 1
-                prev_i = i
-                prev_j = j
-            elif cum_lengths_new[i] == cum_lengths_original[j]:
-                i += 1
-                j += 1
-            elif cum_lengths_new[i] < cum_lengths_original[j]:
-                i += 1
-            else:
-                j += 1
-
-        alignments_mask[example_index, special_tokens_mask_new] = False
-        nonalignments_mask[example_index, special_tokens_mask_new] = False
-
-        if compute_alignment_matrices:
-            alignment_matrix_a[example_index, special_tokens_mask_new, :] = False
-            alignment_matrix_b[example_index, special_tokens_mask_original, :] = False
-
-    return (
-        alignments_mask,
-        nonalignments_mask,
-        alignment_matrix_a,
-        alignment_matrix_b,
-    )
-
-
-# NOTE: assumes tokenizer is byte converted
-def to_longest_prefix_tokenizer(tokenizer, inplace=False):
-    if not inplace:
-        lp_tokenizer = copy.deepcopy(tokenizer)
-    else:
-        lp_tokenizer = tokenizer
-
-    unk_token = (
-        lp_tokenizer.unk_token
-        if lp_tokenizer.unk_token is not None
-        else lp_tokenizer.eos_token
-    )
-
-    # use WordPiece without prefix to achieve longest-prefix tokenization
-    lp_tokenizer._tokenizer.model = tokenizers.models.WordPiece(
-        lp_tokenizer.get_vocab(),
-        unk_token=unk_token,
-        max_input_chars_per_word=1_000_000,  # effectively disable limit on input chars
-    )
-    lp_tokenizer._tokenizer.model.continuing_subword_prefix = ""
-
-    return lp_tokenizer
 
 
 def fix_postprocessor_data(data, vocab):
@@ -613,66 +136,6 @@ def expand_input_ids(input_ids_new, tokenizer, original_vocab, use_heuristic=Fal
             expanded_input_ids[example_index, token_idx] = expanded_token_id
 
     return expanded_input_ids
-
-
-def to_byte_tokenizer(tokenizer, inplace=False):
-    if not inplace:
-        byte_tokenizer = copy.deepcopy(tokenizer)
-    else:
-        byte_tokenizer = tokenizer
-
-    # keep special/added tokens
-    tokens_to_keep_ids = sorted(
-        set(
-            tokenizer.all_special_ids
-            + list(tokenizer.added_tokens_encoder.values())
-            + tokenizer.convert_tokens_to_ids(tokenizer.added_tokens_encoder.keys())
-        )
-    )
-    tokens_to_keep = tokenizer.convert_ids_to_tokens(tokens_to_keep_ids)
-    byte_tokens_in_vocab = [
-        token
-        for token in tokenizer.get_vocab()
-        if token in CHARS_TO_BYTES.keys() and token not in tokens_to_keep
-    ]
-    byte_tokens_not_in_vocab = [
-        token for token in CHARS_TO_BYTES.keys() if token not in byte_tokens_in_vocab
-    ]
-
-    unk_token = (
-        tokenizer.unk_token if tokenizer.unk_token is not None else tokenizer.eos_token
-    )
-
-    if len(byte_tokens_not_in_vocab) > 0:
-        logger.warning(
-            f"Some byte are tokens not in vocab: {byte_tokens_not_in_vocab}. Adding these to the vocab. They will not have a good init."
-        )
-
-    tokens = list(CHARS_TO_BYTES.keys()) + tokens_to_keep
-    byte_vocab = {token: i for i, token in enumerate(tokens)}
-
-    # use ByteLevel tokenizer to achieve byte tokenization
-    byte_tokenizer._tokenizer.model = tokenizers.models.WordPiece(
-        byte_vocab,
-        unk_token=unk_token,
-        max_input_chars_per_word=1_000_000,  # effectively disable limit on input chars
-    )
-
-    # remove added tokens, they would persist to the old vocabulary id
-    f = NamedTemporaryFile()
-    byte_tokenizer._tokenizer.save(f.name)
-    tokenizer_data = json.load(open(f.name, "r"))
-    if "added_tokens" in tokenizer_data:
-        del tokenizer_data["added_tokens"]
-    if "post_processor" in tokenizer_data:
-        fix_postprocessor_data(tokenizer_data["post_processor"], byte_vocab)
-
-    json.dump(tokenizer_data, open(f.name, "w"))
-
-    byte_tokenizer._tokenizer = Tokenizer.from_file(f.name)
-    byte_tokenizer._tokenizer.model.continuing_subword_prefix = ""
-
-    return byte_tokenizer
 
 
 def fvt(
@@ -871,265 +334,6 @@ DEFAULT_SPLIT_REGEX = (
 )
 MAX_CHARS_PER_TOKEN = 16
 # assumes byte pretokenization
-CHARS_TO_BYTES = {
-    "Ā": 0,
-    "ā": 1,
-    "Ă": 2,
-    "ă": 3,
-    "Ą": 4,
-    "ą": 5,
-    "Ć": 6,
-    "ć": 7,
-    "Ĉ": 8,
-    "ĉ": 9,
-    "Ċ": 10,
-    "ċ": 11,
-    "Č": 12,
-    "č": 13,
-    "Ď": 14,
-    "ď": 15,
-    "Đ": 16,
-    "đ": 17,
-    "Ē": 18,
-    "ē": 19,
-    "Ĕ": 20,
-    "ĕ": 21,
-    "Ė": 22,
-    "ė": 23,
-    "Ę": 24,
-    "ę": 25,
-    "Ě": 26,
-    "ě": 27,
-    "Ĝ": 28,
-    "ĝ": 29,
-    "Ğ": 30,
-    "ğ": 31,
-    "Ġ": 32,
-    "!": 33,
-    '"': 34,
-    "#": 35,
-    "$": 36,
-    "%": 37,
-    "&": 38,
-    "'": 39,
-    "(": 40,
-    ")": 41,
-    "*": 42,
-    "+": 43,
-    ",": 44,
-    "-": 45,
-    ".": 46,
-    "/": 47,
-    "0": 48,
-    "1": 49,
-    "2": 50,
-    "3": 51,
-    "4": 52,
-    "5": 53,
-    "6": 54,
-    "7": 55,
-    "8": 56,
-    "9": 57,
-    ":": 58,
-    ";": 59,
-    "<": 60,
-    "=": 61,
-    ">": 62,
-    "?": 63,
-    "@": 64,
-    "A": 65,
-    "B": 66,
-    "C": 67,
-    "D": 68,
-    "E": 69,
-    "F": 70,
-    "G": 71,
-    "H": 72,
-    "I": 73,
-    "J": 74,
-    "K": 75,
-    "L": 76,
-    "M": 77,
-    "N": 78,
-    "O": 79,
-    "P": 80,
-    "Q": 81,
-    "R": 82,
-    "S": 83,
-    "T": 84,
-    "U": 85,
-    "V": 86,
-    "W": 87,
-    "X": 88,
-    "Y": 89,
-    "Z": 90,
-    "[": 91,
-    "\\": 92,
-    "]": 93,
-    "^": 94,
-    "_": 95,
-    "`": 96,
-    "a": 97,
-    "b": 98,
-    "c": 99,
-    "d": 100,
-    "e": 101,
-    "f": 102,
-    "g": 103,
-    "h": 104,
-    "i": 105,
-    "j": 106,
-    "k": 107,
-    "l": 108,
-    "m": 109,
-    "n": 110,
-    "o": 111,
-    "p": 112,
-    "q": 113,
-    "r": 114,
-    "s": 115,
-    "t": 116,
-    "u": 117,
-    "v": 118,
-    "w": 119,
-    "x": 120,
-    "y": 121,
-    "z": 122,
-    "{": 123,
-    "|": 124,
-    "}": 125,
-    "~": 126,
-    "ġ": 127,
-    "Ģ": 128,
-    "ģ": 129,
-    "Ĥ": 130,
-    "ĥ": 131,
-    "Ħ": 132,
-    "ħ": 133,
-    "Ĩ": 134,
-    "ĩ": 135,
-    "Ī": 136,
-    "ī": 137,
-    "Ĭ": 138,
-    "ĭ": 139,
-    "Į": 140,
-    "į": 141,
-    "İ": 142,
-    "ı": 143,
-    "Ĳ": 144,
-    "ĳ": 145,
-    "Ĵ": 146,
-    "ĵ": 147,
-    "Ķ": 148,
-    "ķ": 149,
-    "ĸ": 150,
-    "Ĺ": 151,
-    "ĺ": 152,
-    "Ļ": 153,
-    "ļ": 154,
-    "Ľ": 155,
-    "ľ": 156,
-    "Ŀ": 157,
-    "ŀ": 158,
-    "Ł": 159,
-    "ł": 160,
-    "¡": 161,
-    "¢": 162,
-    "£": 163,
-    "¤": 164,
-    "¥": 165,
-    "¦": 166,
-    "§": 167,
-    "¨": 168,
-    "©": 169,
-    "ª": 170,
-    "«": 171,
-    "¬": 172,
-    "Ń": 173,
-    "®": 174,
-    "¯": 175,
-    "°": 176,
-    "±": 177,
-    "²": 178,
-    "³": 179,
-    "´": 180,
-    "µ": 181,
-    "¶": 182,
-    "·": 183,
-    "¸": 184,
-    "¹": 185,
-    "º": 186,
-    "»": 187,
-    "¼": 188,
-    "½": 189,
-    "¾": 190,
-    "¿": 191,
-    "À": 192,
-    "Á": 193,
-    "Â": 194,
-    "Ã": 195,
-    "Ä": 196,
-    "Å": 197,
-    "Æ": 198,
-    "Ç": 199,
-    "È": 200,
-    "É": 201,
-    "Ê": 202,
-    "Ë": 203,
-    "Ì": 204,
-    "Í": 205,
-    "Î": 206,
-    "Ï": 207,
-    "Ð": 208,
-    "Ñ": 209,
-    "Ò": 210,
-    "Ó": 211,
-    "Ô": 212,
-    "Õ": 213,
-    "Ö": 214,
-    "×": 215,
-    "Ø": 216,
-    "Ù": 217,
-    "Ú": 218,
-    "Û": 219,
-    "Ü": 220,
-    "Ý": 221,
-    "Þ": 222,
-    "ß": 223,
-    "à": 224,
-    "á": 225,
-    "â": 226,
-    "ã": 227,
-    "ä": 228,
-    "å": 229,
-    "æ": 230,
-    "ç": 231,
-    "è": 232,
-    "é": 233,
-    "ê": 234,
-    "ë": 235,
-    "ì": 236,
-    "í": 237,
-    "î": 238,
-    "ï": 239,
-    "ð": 240,
-    "ñ": 241,
-    "ò": 242,
-    "ó": 243,
-    "ô": 244,
-    "õ": 245,
-    "ö": 246,
-    "÷": 247,
-    "ø": 248,
-    "ù": 249,
-    "ú": 250,
-    "û": 251,
-    "ü": 252,
-    "ý": 253,
-    "þ": 254,
-    "ÿ": 255,
-}
-BYTES_TO_CHARS = {v: k for k, v in CHARS_TO_BYTES.items()}
 
 
 def download_from_gcs(bucket_name, source_blob_name, destination_file_name):
@@ -1163,87 +367,18 @@ def parse_gcs_path(gcs_path):
     return bucket_name, blob_name
 
 
-# generation / chat utils
+def preprocess_messages(messages):
+    # convert messages format to prompt with chat template
+    prompt = ""
+    for message in messages:
+        role_tag = {
+            "user": "<|<user_name>|>",
+            "assistant": "<|<assistant_name>|>",
+            "system": "<|<system_name>|>",
+        }[message["role"]]
 
-SPECIAL_KEYS = [
-    "<|<bos>|>",
-    "<|<start_header>|>",
-    "<|<end_header>|>",
-    "<|<eot>|>",
-    "<|<user_name>|>",
-    "<|<assistant_name>|>",
-]
-ALL_SPECIAL_TOKENS = {
-    "Qwen2": ["<|im_start|>", "<|im_end|>", "<|endoftext|>"],
-    "Llama3": [
-        "<|begin_of_text|>",
-        "<|start_header_id|>",
-        "<|end_header_id|>",
-        "<|eot_id|>",
-        "<|end_of_text|>",
-    ],
-    "Gemma2": ["<bos>", "<start_of_turn>", "<end_of_turn>", "<eos>", "<pad>"],
-    "Phi3": ["<|user|>", "<|assistant|>", "<|end|>", "<|endoftext|>"],
-    "GPT2": ["<|endoftext|>"],
-}
-REPLACEMENTS = {
-    "Qwen2": {
-        "<|<bos>|>": None,
-        "<|<start_header>|>": ["<|im_start|>"],
-        "<|<end_header>|>": ["Ċ"],
-        "<|<eot>|>": ["<|im_end|>", "Ċ"],
-        "<|<eos>|>": ["<|endoftext|>"],
-        "<|<user_name>|>": ["user"],
-        "<|<assistant_name>|>": ["assistant"],
-        "<|<system_name>|>": ["system"],
-    },
-    "Llama3": {
-        "<|<bos>|>": ["<|begin_of_text|>"],
-        "<|<start_header>|>": ["<|start_header_id|>"],
-        "<|<end_header>|>": ["<|end_header_id|>", "ĊĊ"],
-        "<|<eot>|>": ["<|eot_id|>"],
-        "<|<eos>|>": ["<|eot_id|>"],
-        "<|<user_name>|>": ["user"],
-        "<|<assistant_name>|>": ["assistant"],
-        "<|<system_name>|>": ["system"],
-    },
-    "Gemma2": {
-        "<|<bos>|>": ["<bos>"],
-        "<|<start_header>|>": ["<start_of_turn>"],
-        "<|<end_header>|>": ["Ċ"],
-        "<|<eot>|>": ["<end_of_turn>", "Ċ"],
-        "<|<eos>|>": ["<eos>"],
-        "<|<user_name>|>": ["user"],
-        "<|<assistant_name>|>": ["model"],
-        "<|<system_name>|>": ["user"],
-    },
-    "Phi3": {
-        "<|<bos>|>": None,
-        "<|<start_header>|>": None,
-        "<|<end_header>|>": ["Ċ"],
-        "<|<eot>|>": ["<|end|>", "Ċ"],
-        "<|<eos>|>": ["<|endoftext|>"],
-        "<|<user_name>|>": ["<|user|>"],
-        "<|<assistant_name>|>": ["<|assistant|>"],
-    },
-    "GPT2": {
-        "<|<bos>|>": None,
-        "<|<start_header>|>": None,
-        "<|<end_header>|>": None,
-        "<|<eot>|>": ["<|endoftext|>"],
-        "<|<eos>|>": ["<|endoftext|>"],
-        "<|<user_name>|>": None,
-        "<|<assistant_name>|>": None,
-    },
-}
-
-
-def get_special_tokens(model_kind):
-    return ALL_SPECIAL_TOKENS[model_kind]
-
-
-def get_replacements(model_kind):
-    return REPLACEMENTS[model_kind]
+        prompt += f"<|<bos>|><|<start_header>|>{role_tag}<|<end_header>|>{message['content']}<|<eot>|>"
+    return prompt
 
 
 def preprocess_prompt(prompt, chat_template_mode):
@@ -1310,6 +445,7 @@ def encode_prompt(prompt, tokenizer, replacements, max_length=None):
             regular_token_indices.extend(
                 [regular_token_start + 1 + i for i in range(len(chunk_tokens))]
             )
+
     start_i = 0
     i = 0
 
@@ -1336,7 +472,7 @@ def encode_prompt(prompt, tokenizer, replacements, max_length=None):
                 process_chunk(chunk)
                 start_i = i
 
-            chunk = prompt[start_i:i + len(key)]
+            chunk = prompt[start_i : i + len(key)]
             process_chunk(chunk)
             start_i = i + len(key)
             i = start_i
@@ -1345,7 +481,6 @@ def encode_prompt(prompt, tokenizer, replacements, max_length=None):
                 return tokens[:max_length], regular_token_indices[:max_length]
         else:
             i += 1
-
 
     if start_i < len(prompt):
         chunk = prompt[start_i:]
@@ -1447,7 +582,9 @@ def get_side_path_mappings(
 
             teacher_length, student_length = bias1_matrix.shape
 
-            for student_idx, teacher_idx in zip(student_mapping.copy(), teacher_mapping.copy()):
+            for student_idx, teacher_idx in zip(
+                student_mapping.copy(), teacher_mapping.copy()
+            ):
                 if (
                     student_idx >= student_length
                     or teacher_idx >= teacher_length

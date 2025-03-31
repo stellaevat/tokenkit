@@ -209,8 +209,8 @@ class TokenizerAlignerCollator:
             and self.tokenizer_pair_bias2_matrix is not None
         ):
             (
-                alignment_matrix_a_pair_nobias,
-                alignment_matrix_b_pair_nobias,
+                alignment_matrix_a_unbiased,
+                alignment_matrix_b_unbiased,
             ) = align.get_unbiased_alignments(
                 input_ids_original,
                 input_ids_new,
@@ -227,10 +227,10 @@ class TokenizerAlignerCollator:
                 bias_threshold=self.tokenizer_pair_bias_threshold,
             )
         else:
-            alignment_matrix_a_pair_nobias = np.full_like(
+            alignment_matrix_a_unbiased = np.full_like(
                 alignment_matrix_a, fill_value=np.nan
             )
-            alignment_matrix_b_pair_nobias = np.full_like(
+            alignment_matrix_b_unbiased = np.full_like(
                 alignment_matrix_b, fill_value=np.nan
             )
 
@@ -256,12 +256,12 @@ class TokenizerAlignerCollator:
             "input_ids_original": input_ids_original,
             "attention_mask_original": attention_mask_original,
             "occuring_tokens_mask_original": occuring_tokens_mask_original,
-            "alignment_matrix_a": alignment_matrix_a,
-            "alignment_matrix_b": alignment_matrix_b,
+            "alignment_matrix_a_unconstrained": alignment_matrix_a,
+            "alignment_matrix_b_unconstrained": alignment_matrix_b,
             "alignment_matrix_a_space": alignment_matrix_a_space,
             "alignment_matrix_b_space": alignment_matrix_b_space,
-            "alignment_matrix_a_pair_nobias": alignment_matrix_a_pair_nobias,
-            "alignment_matrix_b_pair_nobias": alignment_matrix_b_pair_nobias,
+            "alignment_matrix_a_unbiased": alignment_matrix_a_unbiased,
+            "alignment_matrix_b_unbiased": alignment_matrix_b_unbiased,
             "loss_mask_original": loss_mask_original,
             "loss_mask_new": loss_mask_new,
         }
@@ -284,12 +284,12 @@ class TokenizerAlignerCollator:
             "input_ids_original": P("data", None),
             "attention_mask_original": P("data", None),
             "occuring_tokens_mask_original": P(),
-            "alignment_matrix_a": P("data", None),
-            "alignment_matrix_b": P("data", None),
+            "alignment_matrix_a_unconstrained": P("data", None),
+            "alignment_matrix_b_unconstrained": P("data", None),
             "alignment_matrix_a_space": P("data", None),
             "alignment_matrix_b_space": P("data", None),
-            "alignment_matrix_a_pair_nobias": P("data", None),
-            "alignment_matrix_b_pair_nobias": P("data", None),
+            "alignment_matrix_a_unbiased": P("data", None),
+            "alignment_matrix_b_unbiased": P("data", None),
             "loss_mask_original": P("data", None),
             "loss_mask_new": P("data", None),
         }

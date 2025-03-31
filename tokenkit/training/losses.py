@@ -6,9 +6,10 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax.training import common_utils
-from hyper2 import baselines, utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+
+from tokenkit import baseline_utils, utils
 
 
 def get_last_index_per_column(matrix):
@@ -225,27 +226,22 @@ def log1mexp(x):
     return jnp.where(x < log_half, jnp.log1p(-jnp.exp(x)), jnp.log(-jnp.expm1(x)))
 
 
-def compute_distill_main_path_loss(chunk_kind, args, loss_args, epsilon=1e-6):
+def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     original_shift_labels = loss_args.batch["input_ids_original"][..., 1:]
 
-    if chunk_kind == "greedy":
+    if chunk_kind == "unconstrained":
         alignment_matrix_a = loss_args.batch["alignment_matrix_a"]
         alignment_matrix_b = loss_args.batch["alignment_matrix_b"]
         global_alignment_matrix_a = loss_args.global_batch["alignment_matrix_a"]
         global_alignment_matrix_b = loss_args.global_batch["alignment_matrix_b"]
-    elif chunk_kind == "nobias":
-        alignment_matrix_a = loss_args.batch["alignment_matrix_a_nobias"]
-        alignment_matrix_b = loss_args.batch["alignment_matrix_b_nobias"]
-        global_alignment_matrix_a = loss_args.global_batch["alignment_matrix_a_nobias"]
-        global_alignment_matrix_b = loss_args.global_batch["alignment_matrix_b_nobias"]
-    elif chunk_kind == "pair-nobias":
-        alignment_matrix_a = loss_args.batch["alignment_matrix_a_pair_nobias"]
-        alignment_matrix_b = loss_args.batch["alignment_matrix_b_pair_nobias"]
+    elif chunk_kind == "unbiased":
+        alignment_matrix_a = loss_args.batch["alignment_matrix_a_unbiased"]
+        alignment_matrix_b = loss_args.batch["alignment_matrix_b_unbiased"]
         global_alignment_matrix_a = loss_args.global_batch[
-            "alignment_matrix_a_pair_nobias"
+            "alignment_matrix_a_unbiased"
         ]
         global_alignment_matrix_b = loss_args.global_batch[
-            "alignment_matrix_b_pair_nobias"
+            "alignment_matrix_b_unbiased"
         ]
     elif chunk_kind == "space":
         alignment_matrix_a = loss_args.batch["alignment_matrix_a_space"]
@@ -540,7 +536,7 @@ def compute_distill_main_path_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     return distill_main_path_loss
 
 
-def compute_distill_side_path_loss(
+def compute_alm_side_path_loss(
     chunk_kind, student_mapping, teacher_mapping, args, loss_args
 ):
     if chunk_kind == "greedy":
@@ -548,19 +544,14 @@ def compute_distill_side_path_loss(
         alignment_matrix_b = loss_args.batch["alignment_matrix_b"]
         global_alignment_matrix_a = loss_args.global_batch["alignment_matrix_a"]
         global_alignment_matrix_b = loss_args.global_batch["alignment_matrix_b"]
-    elif chunk_kind == "nobias":
-        alignment_matrix_a = loss_args.batch["alignment_matrix_a_nobias"]
-        alignment_matrix_b = loss_args.batch["alignment_matrix_b_nobias"]
-        global_alignment_matrix_a = loss_args.global_batch["alignment_matrix_a_nobias"]
-        global_alignment_matrix_b = loss_args.global_batch["alignment_matrix_b_nobias"]
-    elif chunk_kind == "pair-nobias":
-        alignment_matrix_a = loss_args.batch["alignment_matrix_a_pair_nobias"]
-        alignment_matrix_b = loss_args.batch["alignment_matrix_b_pair_nobias"]
+    elif chunk_kind == "unbiased":
+        alignment_matrix_a = loss_args.batch["alignment_matrix_a_unbiased"]
+        alignment_matrix_b = loss_args.batch["alignment_matrix_b_unbiased"]
         global_alignment_matrix_a = loss_args.global_batch[
-            "alignment_matrix_a_pair_nobias"
+            "alignment_matrix_a_unbiased"
         ]
         global_alignment_matrix_b = loss_args.global_batch[
-            "alignment_matrix_b_pair_nobias"
+            "alignment_matrix_b_unbiased"
         ]
     elif chunk_kind == "space":
         alignment_matrix_a = loss_args.batch["alignment_matrix_a_space"]
@@ -774,23 +765,23 @@ def compute_baseline_dskd_loss(args, loss_args):
 
     if args.baseline.divergence == "akl":
         t2s_div_func = partial(
-            baselines.compute_adaptive_kl_divergence,
+            baseline_utils.compute_adaptive_kl_divergence,
             alpha=args.baseline.adaptive_kl_alpha,
         )
     elif args.baseline.divergence == "skl":
         t2s_div_func = partial(
-            baselines.compute_skewed_kl_divergence,
+            baseline_utils.compute_skewed_kl_divergence,
             skew_lambda=args.baseline.skew_lambda,
         )
     elif args.baseline.divergence == "srkl":
         t2s_div_func = partial(
-            baselines.compute_skewed_reverse_kl_divergence,
+            baseline_utils.compute_skewed_reverse_kl_divergence,
             skew_lambda=args.baseline.skew_lambda,
         )
     elif args.baseline.divergence == "kl":
-        t2s_div_func = baselines.compute_forward_kl_divergence
+        t2s_div_func = baseline_utils.compute_forward_kl_divergence
     elif args.baseline.divergence == "rkl":
-        t2s_div_func = baselines.compute_reverse_kl_divergence
+        t2s_div_func = baseline_utils.compute_reverse_kl_divergence
 
     t2s_kd_loss = t2s_div_func(
         logits=loss_args.student_logits[:, :-1],
@@ -812,7 +803,7 @@ def compute_baseline_dskd_loss(args, loss_args):
 
     s2t_hiddens = (s2t_weight @ s_v_hiddens).astype(s_hiddens.dtype)
     s2t_logits = s2t_hiddens @ loss_args.params["teacher_embeddings"][:, -1, :].T
-    s2t_kd_loss = baselines.compute_forward_kl_divergence(
+    s2t_kd_loss = baseline_utils.compute_forward_kl_divergence(
         logits=s2t_logits,
         teacher_logits=loss_args.teacher_logits[:, :-1],
         target=loss_args.batch["input_ids_original"][:, 1:],
@@ -972,7 +963,7 @@ def compute_baseline_mined_loss(mined_mapping, args, loss_args):
         axis=1,
     )
 
-    elementwise_mined_teacher_kl_loss = baselines.compute_forward_kl_divergence(
+    elementwise_mined_teacher_kl_loss = baseline_utils.compute_forward_kl_divergence(
         aligned_student_kl_logits,
         aligned_teacher_logits,
         target=None,
@@ -980,7 +971,7 @@ def compute_baseline_mined_loss(mined_mapping, args, loss_args):
         padding_id=None,
         reduction="none",
     )
-    elementwise_onehot_kl_loss = baselines.compute_forward_kl_divergence(
+    elementwise_onehot_kl_loss = baseline_utils.compute_forward_kl_divergence(
         aligned_student_onehot_logits,
         aligned_onehot_logits,
         target=None,

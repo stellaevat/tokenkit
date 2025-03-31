@@ -641,7 +641,7 @@ def my_app(args: DictConfig) -> None:
     )
 
     if jax.process_index() == 0:
-        wandb.init(project="hyper2", name=args.name, config=OmegaConf.to_object(args))
+        wandb.init(project="tokenkit", name=args.name, config=OmegaConf.to_object(args))
         wandb.run.log_code()
 
     def predict_embeddings(params):  # TODO: add indices for subsampling
@@ -810,16 +810,20 @@ def my_app(args: DictConfig) -> None:
                     current_loss = losses.compute_clm_loss(args, loss_args)
                 elif loss == "distill_latents":
                     current_loss = losses.compute_distill_latents_loss(args, loss_args)
-                elif loss.startswith("distill_main_path"):
-                    kind = loss.split("_")[-1]
-                    current_loss = losses.compute_distill_main_path_loss(
+                elif loss.startswith("distill_alm"):
+                    kind = loss[len("distill_alm_") :]
+                    if len(kind) == 0:
+                        kind = "unbiased"
+                    current_loss = losses.compute_alm_loss(
                         chunk_kind=kind,
                         args=args,
                         loss_args=loss_args,
                     )
-                elif loss.startswith("distill_side_path"):
-                    kind = loss.split("_")[-1]
-                    current_loss = losses.compute_distill_side_path_loss(
+                elif loss.startswith("distill_alm_side_path"):
+                    kind = loss[len("distill_alm_side_path_") :]
+                    if len(kind) == 0:
+                        kind = "unbiased"
+                    current_loss = losses.compute_alm_side_path_loss(
                         chunk_kind=kind,
                         student_mapping=student_mapping,
                         teacher_mapping=teacher_mapping,

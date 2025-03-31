@@ -1,0 +1,3 @@
+kind: "jsonl"
+path: "artifacts/fineweb-texts.jsonl"
+lang_code: "en"

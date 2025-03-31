@@ -10,6 +10,7 @@ def get_alignment_indices(
     attention_mask_student: np.ndarray,
     tokenizer_teacher: ByteifyTokenizer,
     tokenizer_student: ByteifyTokenizer,
+    check=True,
 ):
     replacements_teacher = {}
     for k, v in tokenizer_teacher.model_kind_cls.replacements.items():
@@ -67,6 +68,9 @@ def get_alignment_indices(
             j += 1
             continue
 
+        if i == len(tokens_teacher) or j == len(tokens_student):
+            break
+
         r_teacher = get_replacement(tokens_teacher, i, replacements_teacher)
         r_student = get_replacement(tokens_student, j, replacements_student)
 
@@ -103,9 +107,6 @@ def get_alignment_indices(
             )
             cum_lengths_student_dict[j] = cum_length_student
 
-            print(tokens_teacher[i], tokens_student[j])
-            print(cum_length_teacher, cum_length_student)
-
             if cum_length_teacher == cum_length_student:
                 normalized_tokens_teacher.append(tokens_teacher[i])
                 normalized_tokens_student.append(tokens_student[j])
@@ -126,6 +127,20 @@ def get_alignment_indices(
                 special_tokens_mask_student.append(False)
                 cum_length_student += len(tokens_student[j])
                 j += 1
+
+    while len(normalized_tokens_teacher) < len(tokens_teacher):
+        normalized_tokens_teacher.append("")
+        special_tokens_mask_teacher.append(True)
+
+    while len(normalized_tokens_student) < len(tokens_student):
+        normalized_tokens_student.append("")
+        special_tokens_mask_student.append(True)
+
+    if check:
+        for start_i, end_i, start_j, end_j in alignment_indices:
+            assert "".join(normalized_tokens_teacher[start_i:end_i]) == "".join(
+                normalized_tokens_student[start_j:end_j]
+            )
 
     return (
         alignment_indices,
@@ -263,9 +278,6 @@ def get_space_alignments(
                 special_tokens_mask_teacher[end_i - 1]
                 or special_tokens_mask_student[end_j - 1]
             ):
-                assert (
-                    teacher_starts_with_space[end_i] == student_starts_with_space[end_j]
-                )
                 assert (
                     special_tokens_mask_student[end_j - 1]
                     == special_tokens_mask_teacher[end_i - 1]

@@ -24,7 +24,7 @@ ATOL = 1e-2
 
 @partial(
     jax.jit,
-    static_argnames=("model_fn", "add_start_of_next_pretoken", "atol"),
+    static_argnames=("model_fn", "atol"),
     out_shardings=(None, None),
 )
 def score(
@@ -34,7 +34,6 @@ def score(
     labels,
     suffix_mask,
     space_mask,
-    add_start_of_next_pretoken,
     logit_mask=None,
     atol=ATOL,
 ):
@@ -65,13 +64,6 @@ def score(
 
     is_greedy = jnp.isclose(sequence_logprobs, max_logprobs, rtol=0.0, atol=atol)
 
-    if add_start_of_next_pretoken:
-        space_logprobs = jnp.log(jnp.dot(probs, space_mask))
-        last_suffix_mask = jnp.cumsum(suffix_mask[:, ::-1], axis=-1)[:, ::-1] == 1
-        followed_by_space_logp = (space_logprobs * last_suffix_mask).sum(-1)
-        sequence_logprobs = sequence_logprobs + followed_by_space_logp
-        is_greedy = jnp.logical_and(is_greedy, jnp.exp(followed_by_space_logp) > 0.5)
-
     return sequence_logprobs, is_greedy
 
 
@@ -85,7 +77,6 @@ class JaxLM(lm_eval.api.model.LM):
         lengths,
         tokens_per_batch,
         add_bos,
-        add_start_of_next_pretoken,
         chat_template_mode,
         logit_mask=None,
         score_fn=score,
@@ -104,7 +95,6 @@ class JaxLM(lm_eval.api.model.LM):
         self.logit_mask = logit_mask
         self.score_fn = score_fn
         self.add_bos = add_bos
-        self.add_start_of_next_pretoken = add_start_of_next_pretoken
         self.chat_template_mode = chat_template_mode
         self.precompile = precompile
 
@@ -239,7 +229,6 @@ class JaxLM(lm_eval.api.model.LM):
                     input_ids[i : i + batch_size, :length],
                     suffix_mask[i : i + batch_size, :length],
                     self.space_mask,
-                    self.add_start_of_next_pretoken,
                     self.logit_mask,
                     ATOL,
                 )
@@ -424,7 +413,6 @@ class LockstepJaxLM(lm_eval.api.model.LM):
         lengths,
         tokens_per_batch,
         add_bos,
-        add_start_of_next_pretoken,
         chat_template_mode,
         combine_fn,
         combine_params,
@@ -441,7 +429,6 @@ class LockstepJaxLM(lm_eval.api.model.LM):
         self.logit_masks = logit_masks
         self.score_fn = score_fn
         self.add_bos = add_bos
-        self.add_start_of_next_pretoken = add_start_of_next_pretoken
         self.chat_template_mode = chat_template_mode
         self.combine_fn = combine_fn
         self.combine_params = combine_params
@@ -859,7 +846,6 @@ def evaluate(
     logit_mask=None,
     output=None,
     add_bos=True,
-    add_start_of_next_pretoken=False,
     chat_template_mode="surround_instruct",
     cache_requests=True,
     jaxlm_kwargs=None,
@@ -879,7 +865,6 @@ def evaluate(
         lengths=lengths,
         tokens_per_batch=tokens_per_batch,
         add_bos=add_bos,
-        add_start_of_next_pretoken=add_start_of_next_pretoken,
         chat_template_mode=chat_template_mode,
         logit_mask=logit_mask,
         **(jaxlm_kwargs or {}),
@@ -928,7 +913,6 @@ def evaluate_lockstep(
     combine_params,
     logit_masks=None,
     output=None,
-    add_start_of_next_pretoken=False,
     chat_template_mode="surround_instruct",
     cache_requests=True,
     jaxlm_kwargs=None,
@@ -948,7 +932,6 @@ def evaluate_lockstep(
         lengths=lengths,
         tokens_per_batch=tokens_per_batch,
         add_bos=add_bos,
-        add_start_of_next_pretoken=add_start_of_next_pretoken,
         chat_template_mode=chat_template_mode,
         combine_fn=combine_fn,
         combine_params=combine_params,

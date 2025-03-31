@@ -20,28 +20,6 @@ SHARD_PATTERNS = {
         "(opt_state|params).*self_attention.post.w": P("model", None),
         "(opt_state|params).*embeddings": P("model", None),
     },
-    "compat_hypernet": {
-        "opt_state.*?\.(v|v_row|v_col)\..*": P(),
-        # projections
-        "(params|opt_state).*?hypernet.*projection.*dense1.kernel": P(None, "model"),
-        "(params|opt_state).*?hypernet.*projection.*dense2.kernel": P("model", None),
-        "(params|opt_state).*?hypernet.*projection.*layers_\\d+.kernel": P(
-            "model", None
-        ),
-        # passthrough
-        "(params|opt_state).*?hypernet.input_embeddings.embedding": P("model", None),
-        "(params|opt_state).*?hypernet.output_embeddings.embedding": P("model", None),
-        # roberta
-        "(params|opt_state).*?hypernet.*.attention.self.(query|key|value).kernel": P(
-            None, "model"
-        ),
-        "(params|opt_state).*?hypernet.*.attention.output.dense.kernel": P(
-            "model", None
-        ),
-        "(params|opt_state).*?hypernet.*.intermediate.dense.kernel": P(None, "model"),
-        "(params|opt_state).*?hypernet.*.output.dense.kernel": P("model", None),
-        "(opt_state|params).*embeddings$": P("model", None),
-    },
     "llama": {
         "(opt_state|params).*embed_tokens.*embedding": P("model", "data"),
         "(opt_state|params).*self_attn.(q_proj|k_proj|v_proj).kernel.a": P(

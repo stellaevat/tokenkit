@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from pprint import pprint
+from pprint import pformat
 
 import flax
 import jax
@@ -17,7 +17,7 @@ from tqdm.auto import tqdm as raw_tqdm
 from transformers import AutoTokenizer
 
 from tokenkit import constants
-from tokenkit.byteify import load_byteify_tokenizer
+from tokenkit.byteify import ByteifyTokenizer, load_byteify_tokenizer
 
 tqdm = partial(raw_tqdm, dynamic_ncols=True, disable=jax.process_index() != 0)
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def log(data, step, **kwargs):
-    pprint({**data, "_step": step})
+    logger.info(pformat({**data, "_step": step}))
     if jax.process_index() == 0:
         wandb.log(data, step=step, **kwargs)
 
@@ -70,7 +70,13 @@ def get_space_mask(tokenizer):
     return space_mask
 
 
-def expand_input_ids(input_ids_new, tokenizer, original_vocab, use_heuristic=False):
+def expand_input_ids(
+    input_ids_new,
+    tokenizer,
+    original_vocab,
+    use_heuristic=False,
+    maxlen=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
+):
     expanded_input_ids = np.zeros_like(input_ids_new)
 
     for example_index in range(len(input_ids_new)):
@@ -91,7 +97,11 @@ def expand_input_ids(input_ids_new, tokenizer, original_vocab, use_heuristic=Fal
             if use_heuristic:
                 prefix_start = token_idx
 
-                while prefix_start > 0 and not starts_with_space[prefix_start]:
+                while (
+                    prefix_start > 0
+                    and (maxlen is None or token_idx + 1 - prefix_start < maxlen)
+                    and not starts_with_space[prefix_start]
+                ):
                     prefix_start -= 1
             else:
                 prefix_start = 0
@@ -109,8 +119,8 @@ def expand_input_ids(input_ids_new, tokenizer, original_vocab, use_heuristic=Fal
 
 
 def fvt(
-    source_tokenizer,
-    target_tokenizer,
+    source_tokenizer: ByteifyTokenizer,
+    target_tokenizer: ByteifyTokenizer,
     source_embeddings,
     fallback_mode="random",
     verbose=True,
@@ -156,9 +166,14 @@ def fvt(
                 else:
                     constituent_idx = np.array([])
             else:
-                decomposed = source_tokenizer._tokenizer.model.tokenize(token)
+                try:
+                    decomposed = source_tokenizer.convert_tokens_to_ids(
+                        source_tokenizer.backend_tokenize(token)
+                    )
+                except UnicodeDecodeError:
+                    decomposed = []
                 constituent_idx = np.array(
-                    [x.id for x in decomposed if x.id < len(source_embeddings)]
+                    [x for x in decomposed if x < len(source_embeddings)]
                 )
 
             if len(constituent_idx) > 0:
@@ -348,7 +363,7 @@ def encode_prompt(prompt, tokenizer, max_length=None):
 
     def process_chunk(chunk):
         if chunk in tokenizer.added_tokens_encoder:
-            tokens.append(chunk)
+            tokens.append(tokenizer.model_kind_cls.byte_fallback_fn(chunk))
             regular_token_indices.append(-1)
         elif chunk in tokenizer.model_kind_cls.replacements:
             if tokenizer.model_kind_cls.replacements[chunk] is not None:

@@ -6,6 +6,7 @@ from typing import Dict, List, Union
 
 import tokenizers
 import tokenizers.decoders
+import tokenizers.normalizers
 import tokenizers.pre_tokenizers
 from tokenizers import Tokenizer
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
@@ -97,6 +98,26 @@ class ByteifyTokenizer:
         self.tokenizer = tokenizer
         self.model_kind_cls = model_kind_cls
 
+        if any(
+            isinstance(self.tokenizer.backend_tokenizer.normalizer, x)
+            for x in [
+                tokenizers.normalizers.NFC,
+                tokenizers.normalizers.NFD,
+                tokenizers.normalizers.NFKC,
+                tokenizers.normalizers.NFKD,
+            ]
+        ):
+            logger.warning(
+                f"ByteifyTokenizer does not currently support normalizers since they could be different between the teacher and the student. Removing {self.tokenizer.backend_tokenizer.normalizer} normalizer. This could have adverse effects!"
+            )
+            self.tokenizer.backend_tokenizer.normalizer = None
+        elif isinstance(
+            self.tokenizer.backend_tokenizer.normalizer, tokenizers.normalizers.Sequence
+        ):
+            raise ValueError(
+                "ByteifyTokenizer does not currently support sequence normalizers. Please open an issue / check existing issues."
+            )
+
         pad_token = next(
             token
             for token in [
@@ -110,11 +131,15 @@ class ByteifyTokenizer:
         self.tokenizer.pad_token = pad_token
         self.tokenizer.padding_side = "right"
 
-        self.vocab = {
-            self.model_kind_cls.byte_fallback_fn(k): v
-            for k, v in self.tokenizer.vocab.items()
-        }
-        self.inv_vocab = {v: k for k, v in self.vocab.items()}
+        self.vocab = {}
+        self.inv_vocab = {}
+
+        for k, v in self.tokenizer.vocab.items():
+            byte_k = self.model_kind_cls.byte_fallback_fn(k)
+            if byte_k not in self.vocab:
+                self.vocab[byte_k] = v
+
+            self.inv_vocab[v] = byte_k
 
     def convert_ids_to_tokens(
         self, ids: Union[int, List[int]]
@@ -143,6 +168,12 @@ class ByteifyTokenizer:
     def __len__(self):
         return len(self.tokenizer)
 
+    def add_tokens(self, tokens: List[str]):
+        self.tokenizer.add_tokens(tokens)
+
+    def save_pretrained(self, *args, **kwargs):
+        self.tokenizer.save_pretrained(*args, **kwargs)
+
     @property
     def added_tokens_encoder(self):
         return self.tokenizer.added_tokens_encoder
@@ -169,6 +200,43 @@ class ByteifyTokenizer:
 
     def encode(self, *args, **kwargs):
         return self.tokenizer.encode(*args, **kwargs)
+
+    def backend_tokenize(self, pretoken: str) -> List[str]:
+        # this is not ideal: needs the pretoken to be a decodable string
+        # and needs hacks for handling prefix spaces correctly
+
+        if len(pretoken) == 0:
+            return []
+
+        pretoken_bytes = bytes([CHARS_TO_BYTES[c] for c in pretoken])
+        pretoken_string = pretoken_bytes.decode("utf-8")
+
+        starts_with_space = pretoken_string[0] == " "
+        pretoken_string = self.tokenizer.backend_tokenizer.normalizer.normalize_str(
+            pretoken_string
+        )
+        if not starts_with_space:
+            pretoken_string = pretoken_string.lstrip("▁").lstrip(" ")
+
+        pretoken_string = "".join(
+            [
+                x[0]
+                for x in self.tokenizer.backend_tokenizer.pre_tokenizer.pre_tokenize_str(
+                    pretoken_string
+                )
+            ]
+        )
+        if not starts_with_space:
+            pretoken_string = pretoken_string.lstrip("▁").lstrip(" ").lstrip("Ġ")
+
+        return self.convert_ids_to_tokens(
+            [
+                x.id
+                for x in self.tokenizer.backend_tokenizer.model.tokenize(
+                    pretoken_string
+                )
+            ]
+        )
 
     def decode(self, *args, **kwargs):
         return self.tokenizer.decode(*args, **kwargs)

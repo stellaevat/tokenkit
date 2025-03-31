@@ -211,7 +211,7 @@ def my_app(args: DictConfig) -> None:
 
         @partial(
             jax.jit,
-            static_argnames=("model_fn", "add_start_of_next_pretoken", "atol"),
+            static_argnames=("model_fn", "atol"),
             in_shardings=(
                 param_shardings,
                 NamedSharding(mesh, P()),
@@ -231,7 +231,6 @@ def my_app(args: DictConfig) -> None:
             labels,
             suffix_mask,
             space_mask,
-            add_start_of_next_pretoken,
             logit_mask,
             atol=ATOL,
         ):
@@ -247,7 +246,6 @@ def my_app(args: DictConfig) -> None:
                 labels=labels,
                 suffix_mask=suffix_mask,
                 space_mask=space_mask,
-                add_start_of_next_pretoken=add_start_of_next_pretoken,
                 logit_mask=logit_mask,
                 atol=atol,
             )

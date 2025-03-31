@@ -7,8 +7,6 @@ from flax import serialization, traverse_util
 from transformers import AutoConfig
 from transformers.utils.hub import cached_file
 
-from tokenkit import utils
-
 
 def get_input_embedding_path(model_type):
     return {
@@ -196,11 +194,11 @@ def set_num_layers(config, num_layers):
 
 
 def strip_layers(model_params, config, n_keep=1):
-    for layer_idx in range(n_keep, utils.get_num_layers(config)):
+    for layer_idx in range(n_keep, get_num_layers(config)):
         model_params, _ = pop(
             model_params, f"{get_layer_path(config.model_type)}.{layer_idx}"
         )
 
-    utils.set_num_layers(config, n_keep)
+    set_num_layers(config, n_keep)
 
     return model_params

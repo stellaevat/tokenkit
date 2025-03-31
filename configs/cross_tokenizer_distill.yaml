@@ -1,0 +1,117 @@
+dtype: bfloat16
+debug: false
+seed: 1234
+max_teacher_length: 512
+max_student_length: 2048
+steps: 50_000
+warmup_steps: 2_000
+name: "unnamed"
+output: "outputs/patch"
+num_workers: 16
+log_interval: 100
+sync_interval: 500
+eval_interval: 5000
+save_interval: 5000
+pad_to_multiple_of: 64
+eval_at_step_zero: false
+save_at_step_zero: false
+skip_lm_eval: false
+output_embeddings_mode: "preserve"
+special_tokens_mode: "ignore_pad"
+use_chat_template: false
+chat_template_mode: direct_encode
+loss_mask_mode: null
+gradient_checkpointing: false
+do_cost_analysis: false
+dry_run: false
+
+n_data_parallel: 1
+n_model_parallel: 8
+
+losses: [distill_main_path]
+loss_weights: null
+loss_weight_mode: null
+uncertainty_s_init: 0
+loss_schedules: null
+ema_alpha: 0.95
+
+bce_temp: 100.0
+
+distill_chunk_sizes: [1]
+distill_main_path_diff_fn: "bce"
+distill_main_path_numerator: "chunk_count"
+distill_main_path_denominator: "chunk_count"
+train_model_mode: "lora"
+model_lora_rank: 256
+model_lora_alpha: 64
+train_embeddings: true
+target_tokenizer: longest_prefix # 'longest_prefix', 'byte' or path to tokenizer
+tokens_to_add: null
+
+latents_to_align: "last_hidden_state"
+latents_normalization: "l2_channelwise"
+latents_chunks: "naive"
+latents_do_project: false
+
+side_path_mapping_mode: null
+side_path_distance_fn: "kl"
+
+ignore_normalizer: false
+cover_mode: "append_space"
+tokenizer_pair_data_path: null
+tokenizer_pair_bias_threshold: 0.0
+tokenizer_pair_bias_threshold_side_path: null
+
+add_expanded_input_ids: false
+expanded_input_ids_projection_alpha: null
+
+data:
+  batch_size: 16
+
+ppl_eval_data:
+  kind: "jsonl"
+  path: "artifacts/fineweb-edu-texts-xsmall.jsonl"
+  lang_code: "en"
+  n_subsample: 1000
+  batch_size: 16
+
+export_to_gcs_bucket: null
+
+hypernet:
+  architecture: transformer
+  num_layers: 1
+  residual: true
+  residual_alpha: 1
+  use_attention: false
+
+n_prefix_layers: 0
+n_suffix_layers: 0
+
+prefix_steps: 0
+prefix_lr: 0.0
+prefix_trainable: "non_overlapping_embeddings"
+
+optimizer:
+  learning_rate: 3e-5
+  max_grad_norm: 1.0
+  param_groups:
+    - pattern: .*(projector_query|projector_s2t|projector_t2s|projector_latents|loss_weights).*
+      lr_scale: 2
+
+baseline:
+  divergence: "srkl"
+  dskd_use_causal_attention_mask: false
+  adaptive_kl_alpha: 0.5
+  skew_lambda: 0.1
+  teacher_temperature: 1.0
+  kd_rate: 0.5
+  kd_temp: 2.0
+
+eval:
+  tasks: ["piqa", "hellaswag", "arc_easy"]
+
+defaults:
+  - _self_
+  - data: tulu3
+  - eval: default
+  - optimizer: adamw

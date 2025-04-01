@@ -1,4 +1,6 @@
 outputs
+tokenkit_env
+wandb
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

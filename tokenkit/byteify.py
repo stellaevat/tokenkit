@@ -212,9 +212,10 @@ class ByteifyTokenizer:
         pretoken_string = pretoken_bytes.decode("utf-8")
 
         starts_with_space = pretoken_string[0] == " "
-        pretoken_string = self.tokenizer.backend_tokenizer.normalizer.normalize_str(
-            pretoken_string
-        )
+        if self.tokenizer.backend_tokenizer.normalizer is not None:
+            pretoken_string = self.tokenizer.backend_tokenizer.normalizer.normalize_str(
+                pretoken_string
+            )
         if not starts_with_space:
             pretoken_string = pretoken_string.lstrip("▁").lstrip(" ")
 
@@ -277,6 +278,8 @@ def load_byteify_tokenizer(tokenizer_spec: str) -> ByteifyTokenizer:
             target_model_kind_cls,
             tokens_to_keep=sorted(tokens_used_in_template),
         )
+        target_model_kind_cls.byte_fallback_fn = lambda x: x
+    elif conversion == "prebyteified":
         target_model_kind_cls.byte_fallback_fn = lambda x: x
     elif conversion is not None:
         raise ValueError(f"Invalid conversion: {conversion}")

@@ -525,14 +525,6 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
 
     distill_main_path_loss = elementwise_loss.mean() / len(args.distill_chunk_sizes)
 
-    # return {
-    #     "loss": distill_main_path_loss,
-    #     "elementwise_loss": elementwise_loss,
-    #     "aligned_counts": full_aligned_counts,
-    #     "t_full_aligned_main_logp": t_full_aligned_main_logp,
-    #     "s_full_aligned_main_logp": s_full_aligned_main_logp,
-    #     "diff_fn": diff_fn,
-    # }
     return distill_main_path_loss
 
 

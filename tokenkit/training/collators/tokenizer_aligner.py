@@ -22,6 +22,7 @@ class TokenizerAlignerCollator:
         loss_mask_mode=None,
         tokenizer_pair_data_path=None,
         tokenizer_pair_bias_threshold=0.0,
+        require_bias_matrices=False,
     ):
         self.tokenizer_original = tokenizer_original
         self.tokenizer_original_vocab = tokenizer_original.get_vocab()
@@ -86,6 +87,14 @@ class TokenizerAlignerCollator:
             )
         else:
             self.student_token_probs = None
+
+        if require_bias_matrices and (
+            self.tokenizer_pair_bias1_matrix is None
+            or self.tokenizer_pair_bias2_matrix is None
+        ):
+            raise ValueError(
+                "Bias matrices are required but not found in the given path."
+            )
 
         self.tokenizer_pair_bias_threshold = tokenizer_pair_bias_threshold
 

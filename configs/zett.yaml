@@ -1,0 +1,4 @@
+source_model_pretrained_name_or_path: benjamin/gemma-2-2b-it-flax
+source_tokenizer_name: google/gemma-2-2b-it:source=Gemma2
+target_tokenizer_name: Qwen/Qwen2.5-1.5B:source=Qwen2:target=Gemma2
+output: outputs/zett/gemma-2-2b-it-flax-fvt-qwen

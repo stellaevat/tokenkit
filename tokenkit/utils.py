@@ -10,12 +10,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import regex as re
-import wandb
 from flax import traverse_util
 from scipy import sparse
 from tqdm.auto import tqdm as raw_tqdm
 from transformers import AutoTokenizer
 
+import wandb
 from tokenkit import constants
 from tokenkit.byteify import ByteifyTokenizer, load_byteify_tokenizer
 

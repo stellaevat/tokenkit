@@ -1,7 +1,6 @@
 teacher_tokenizer_name: google/gemma-2-2b-it:source=Gemma2
 target_tokenizer_name: Qwen/Qwen2.5-1.5B:source=Qwen2:target=Gemma2
 output: outputs/tokenizer_data/gemma2_to_qwen2
-num_workers: 64
 seed: 1234
 additive_smoothing_constant: 1e-9
 teacher_subsample_percent: null
@@ -9,6 +8,7 @@ student_subsample_percent: null
 
 data:
   batch_size: 1024
+  num_workers: 64
 
 defaults:
   - _self_

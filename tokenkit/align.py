@@ -207,7 +207,7 @@ def get_unconstrained_alignments(
         alignment_matrix_teacher[example_index, ~teacher_mask, :] = False
         alignment_matrix_student[example_index, ~student_mask, :] = False
 
-    return alignment_matrix_teacher, alignment_matrix_student
+    return alignment_matrix_student, alignment_matrix_teacher
 
 
 def get_space_alignments(
@@ -287,7 +287,7 @@ def get_space_alignments(
         alignment_matrix_teacher[example_index, ~teacher_mask, :] = False
         alignment_matrix_student[example_index, ~student_mask, :] = False
 
-    return alignment_matrix_teacher, alignment_matrix_student
+    return alignment_matrix_student, alignment_matrix_teacher
 
 
 def get_unbiased_alignments(
@@ -359,17 +359,16 @@ def get_unbiased_alignments(
             if (
                 special_tokens_mask_teacher[end_i - 1]
                 or special_tokens_mask_student[end_j - 1]
-                and is_unbiased(
-                    input_ids_teacher[example_index][end_i - 1],
-                    input_ids_student[example_index][end_j - 1],
-                )
+            ) or is_unbiased(
+                input_ids_teacher[example_index][end_i - 1],
+                input_ids_student[example_index][end_j - 1],
             ):
                 chunk_idx += 1
 
         alignment_matrix_teacher[example_index, ~teacher_mask, :] = False
         alignment_matrix_student[example_index, ~student_mask, :] = False
 
-    return alignment_matrix_teacher, alignment_matrix_student
+    return alignment_matrix_student, alignment_matrix_teacher
 
 
 def test_get_alignment_indices():

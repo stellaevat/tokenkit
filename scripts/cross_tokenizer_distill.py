@@ -300,7 +300,9 @@ def get_state(
         out_shardings=state_shardings,
         donate_argnums=(0,),
     )(params)
-    if not args.debug:
+
+    disable_jit = os.environ.get("JAX_DISABLE_JIT", "").lower()
+    if not (args.debug or disable_jit == "true" or disable_jit == "1"):
         jax.tree.map(lambda x: x.delete(), params)  # make sure params are deleted
 
     return state, state_shardings
@@ -625,6 +627,7 @@ def my_app(args: DictConfig) -> None:
         loss_mask_mode=args.loss_mask_mode,
         tokenizer_pair_data_path=args.tokenizer_pair_data_path,
         tokenizer_pair_bias_threshold=args.tokenizer_pair_bias_threshold,
+        require_bias_matrices=[any("unbiased" in x for x in args.losses)],
     )
 
     train_dataloader = StatefulDataLoader(

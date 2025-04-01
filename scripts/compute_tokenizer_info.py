@@ -2,8 +2,9 @@
 Example Usage:
 
 ipython --pdb scripts/compute_tokenizer_info.py -- \
-    student_tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2:target=Qwen2\' \
-    output=\'outputs/tokenizer_data/source=Gemma2_target=Qwen2\'
+    teacher_tokenizer_name=google/gemma-2-2b-it:source=Gemma2 \
+    target_tokenizer_name=Qwen/Qwen2.5-1.5B:source=Qwen2:target=Gemma2 \
+    output='outputs/tokenizer_data/gemma2_to_qwen2_new'
 """
 
 import json
@@ -115,15 +116,14 @@ def count_tokens_map(examples, tokenizer):
         for input_id in input_ids
     ]
     return {
-        "counter": [pickle.dumps(Counter(flat_input_ids))],
+        "counter": pickle.dumps(Counter(flat_input_ids)),
     }
 
 
-def count_tokens(dset, tokenizer, batch_size, num_workers):
+def count_tokens(dset, tokenizer, num_workers):
     token_counters_dset = dset.map(
         partial(count_tokens_map, tokenizer=tokenizer),
-        batched=True,
-        batch_size=batch_size,
+        batched=False,  # already batched
         num_proc=num_workers if num_workers > 0 else None,
         remove_columns=dset.column_names,
         desc="Counting tokens",
@@ -160,14 +160,15 @@ if __name__ == "__main__":
     dset = data.get_dataset(**args.data, seed=args.seed)
 
     if not (output_dir / "teacher_counts.json").exists():
-        dset_to_use = dset.dset
+        assert isinstance(dset, data.HFDataset)
+        dset_to_use = dset.stream
 
         if args.teacher_subsample_percent is not None:
             n_subsample = int(len(dset_to_use) * args.teacher_subsample_percent)
             dset_to_use = dset_to_use.select(np.arange(n_subsample))
 
         teacher_token_counts = count_tokens(
-            dset_to_use, tokenizer_teacher, args.data.batch_size, args.num_workers
+            dset_to_use, tokenizer_teacher, args.data.num_workers
         )
         json.dump(
             teacher_token_counts,
@@ -179,14 +180,15 @@ if __name__ == "__main__":
             json.load(open(output_dir / "teacher_counts.json"))
         )
     if not (output_dir / "student_counts.json").exists():
-        dset_to_use = dset.dset
+        assert isinstance(dset, data.HFDataset)
+        dset_to_use = dset.stream
 
         if args.student_subsample_percent is not None:
             n_subsample = int(len(dset_to_use) * args.student_subsample_percent)
             dset_to_use = dset_to_use.select(np.arange(n_subsample))
 
         student_token_counts = count_tokens(
-            dset_to_use, target_tokenizer, args.data.batch_size, args.num_workers
+            dset_to_use, target_tokenizer, args.data.num_workers
         )
         json.dump(
             student_token_counts,
@@ -305,7 +307,7 @@ if __name__ == "__main__":
     pair_data_loader = DataLoader(
         [pairs[i] for i in pair_permutation],
         batch_size=args.data.batch_size,
-        num_workers=args.num_workers,
+        num_workers=args.data.num_workers,
         collate_fn=pair_collate,
     )
 

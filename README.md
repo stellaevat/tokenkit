@@ -15,6 +15,7 @@
 - [Features](#features)
     - [Cross-Tokenizer Distillation](#cross-tokenizer-distillation)
     - [Zero-Shot Tokenizer Transfer](#zero-shot-tokenizer-transfer)
+    - [Token-Level Ensembling & Evaluation](#token-level-ensembling--evaluation)
 - [Citation](#citation)
 - [Acknowledgments](#acknowledgments)
 
@@ -40,11 +41,11 @@ git clone https://github.com/bminixhofer/tokenkit
 python -m venv tokenkit_env
 . tokenkit_env/bin/activate
 
-# Install torch & jax
+# Install torch & jax 0.5.0
 # Jax installation instructions: https://docs.jax.dev/en/latest/installation.html#installation
 # PyTorch installation instructions: https://pytorch.org/get-started/locally/
 # For example:
-pip install torch jax[tpu]==0.5.0
+pip install torch jax[tpu]==0.5.0 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # Currently, tokenkit relies on forks of `transformers` and `lm_eval`
 pip install git+https://github.com/bminixhofer/transformers
@@ -60,7 +61,7 @@ pip install paxml==1.4.0 praxis==1.4.0 --no-deps
 
 ### Cross-Tokenizer Distillation
 
-`tokenkit` supports [Approximate Likelihood Matching (ALM)](https://arxiv.org/abs/2503.20083) for cross-tokenizer distillation. We have found ALM to perform best, but we have implemented the following baselines:
+`tokenkit` supports [Approximate Likelihood Matching (ALM)](https://arxiv.org/abs/2503.20083) for cross-tokenizer distillation. ALM usually performs best, but we have also implemented the following baselines:
 
 - [Dual Space Knowledge Distillation (DSKD)](https://arxiv.org/abs/2406.17328)
 - [Universal Logit Distillation (ULD)](https://arxiv.org/abs/2402.12030)
@@ -74,7 +75,37 @@ You can run cross-tokenizer distillation using the [`scripts/cross_tokenizer_dis
 
 You can run Zero-Shot Tokenizer Transfer using the [`scripts/zett.py`](scripts/zett.py) script.
 
-**🚧 We are working on implementing more ZeTT methods (including hypernetwork training introduced [here](https://arxiv.org/abs/2405.07883)). 🚧**
+**🚧 We are working on implementing more ZeTT methods (including hypernetwork training introduced [here](https://arxiv.org/abs/2405.07883)).**
+
+### Token-Level Ensembling & Evaluation
+
+`tokenkit` supports autoregressive generation & loglikelihood scoring evaluation by implementing a Jax backend to the [LM Evaluation Harness](https://github.com/EleutherAI/lm-evaluation-harness). Alongside generating from single models, you can also generate from *token-level ensembles* of models. There are some predefined ensembles in [`configs/models`](configs/models). For example, this evaluates a token-level ensemle of Llama and Qwen on MMLU: 
+
+```bash
+python3 scripts/eval_lockstep.py \
+  models=llama_qwen \
+  eval.tasks=[mmlu]
+```
+
+To evaluate pretrained byte-level models, you'll need to pass embeddings to expand the input ids with (i.e., to use as n-gram embeddings). For example:
+
+```bash
+python3 scripts/eval.py \
+  +main.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-Byte\' \
+  +main.tokenizer_name=\'benjamin/Gemma2-2B-IT-Byte:source=Gemma2:conversion=prebyteified\' \
+  +expand.pretrained_model_name_or_path=\'benjamin/gemma-2-2b-it-flax\' \
+  +expand.tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2\' \
+  eval.tasks=[mmlu]
+```
+
+To evaluate any other model (for example, subword-to-subword transferred models), use for example the following:
+
+```bash
+python3 scripts/eval.py \
+  +main.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer\' \
+  +main.tokenizer_name=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer:source=Gemma2:conversion=prebyteified\' \
+  eval.tasks=[mmlu] \
+```
 
 ## Citation
 

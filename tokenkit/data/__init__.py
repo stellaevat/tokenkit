@@ -8,7 +8,9 @@ from tokenkit.utils import preprocess_messages
 
 
 class JSONLDataset(Dataset):
-    def __init__(self, path, lang_code, batch_size, n_subsample=None, seed=None):
+    def __init__(
+        self, path, lang_code, batch_size, n_subsample=None, num_workers=0, seed=None
+    ):
         self.path = path
         self.lang_code = lang_code
         self.batch_size = batch_size
@@ -161,7 +163,13 @@ class HFDataset:
 
 class HFSavedDataset(Dataset):
     def __init__(
-        self, dataset_configs, lang_code, batch_size, n_subsample=None, seed=None
+        self,
+        dataset_configs,
+        lang_code,
+        batch_size,
+        n_subsample=None,
+        num_workers=0,
+        seed=None,
     ):
         self.dataset_configs = dataset_configs
         self.lang_code = lang_code

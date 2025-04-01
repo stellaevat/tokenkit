@@ -8,8 +8,8 @@ warmup_steps: 2_000
 name: "unnamed"
 output: "outputs/patch"
 num_workers: 16
-log_interval: 100
-sync_interval: 500
+log_interval: 10
+sync_interval: 100
 eval_interval: 5000
 save_interval: 5000
 pad_to_multiple_of: 64
@@ -18,7 +18,7 @@ save_at_step_zero: false
 skip_lm_eval: false
 output_embeddings_mode: "preserve"
 special_tokens_mode: "ignore_pad"
-use_chat_template: false
+use_chat_template: true
 chat_template_mode: direct_encode
 loss_mask_mode: null
 gradient_checkpointing: false
@@ -42,7 +42,7 @@ distill_main_path_diff_fn: "bce"
 distill_main_path_numerator: "chunk_count"
 distill_main_path_denominator: "chunk_count"
 train_model_mode: "lora"
-model_lora_rank: 256
+model_lora_rank: 64
 model_lora_alpha: 64
 train_embeddings: true
 target_tokenizer: longest_prefix # 'longest_prefix', 'byte' or path to tokenizer
@@ -59,7 +59,7 @@ side_path_distance_fn: "kl"
 ignore_normalizer: false
 cover_mode: "append_space"
 tokenizer_pair_data_path: null
-tokenizer_pair_bias_threshold: 0.0
+tokenizer_pair_bias_threshold: 1e-4
 tokenizer_pair_bias_threshold_side_path: null
 
 add_expanded_input_ids: false
@@ -67,6 +67,7 @@ expanded_input_ids_projection_alpha: null
 
 data:
   batch_size: 16
+  num_workers: 16
 
 ppl_eval_data:
   kind: "jsonl"

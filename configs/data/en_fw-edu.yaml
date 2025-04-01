@@ -1,8 +1,0 @@
-kind: hf
-mix_languages: false
-dataset_configs:
-- lang_code: en
-  kwargs:
-    path: "HuggingFaceFW/fineweb-edu"
-    name: "sample-100BT"
-    split: "train"

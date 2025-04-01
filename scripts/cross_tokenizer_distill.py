@@ -56,7 +56,6 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import torch
-import wandb
 from flax import traverse_util
 from flax.training import common_utils, train_state
 from jax.experimental import multihost_utils
@@ -66,6 +65,7 @@ from omegaconf import DictConfig, OmegaConf
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoConfig, FlaxAutoModelForCausalLM
 
+import wandb
 from tokenkit import data, eval, gcs_utils, utils
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.models import lora, param, sharding
@@ -769,10 +769,10 @@ def my_app(args: DictConfig) -> None:
             scalar_report["student_exp_log_softmax_max"] = student_probs.max()
 
             scalar_report["n_teacher_used_tokens"] = (
-                global_batch["alignment_matrix_b"].any(-1).sum(-1).mean()
+                global_batch["alignment_matrix_b_unconstrained"].any(-1).sum(-1).mean()
             )
             scalar_report["n_student_used_tokens"] = (
-                global_batch["alignment_matrix_a"].any(-1).sum(-1).mean()
+                global_batch["alignment_matrix_a_unconstrained"].any(-1).sum(-1).mean()
             )
             scalar_report["loss_mask_original_mean"] = global_batch[
                 "loss_mask_original"

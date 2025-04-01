@@ -1,7 +1,0 @@
-kind: "hf_saved"
-lang_code: "en"
-dataset_configs:
-  - path: "/lfs/dolmino_50B_medium"
-    p: 0.75
-  - path: "/lfs/tulu3"
-    p: 0.25

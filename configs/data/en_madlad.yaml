@@ -1,8 +1,0 @@
-kind: hf
-mix_languages: false
-dataset_configs:
-- lang_code: en
-  kwargs:
-    path: "allenai/madlad-400"
-    name: "en"
-    split: "clean"

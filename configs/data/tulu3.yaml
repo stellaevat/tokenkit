@@ -1,4 +1,8 @@
-kind: "hf_saved"
-lang_code: "en"
+kind: "hf"
+mix_languages: false
+streaming: false
 dataset_configs:
-  - path: "/lfs/tulu3"
+  - lang_code: en
+    kwargs: 
+      path: allenai/tulu-3-sft-mixture
+      split: train

@@ -1,4 +1,0 @@
-kind: "hf_saved"
-lang_code: "en"
-dataset_configs:
-  - path: "/lfs/tulu3_math_sampled_completions_64k"

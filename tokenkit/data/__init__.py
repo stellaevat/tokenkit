@@ -4,6 +4,8 @@ import datasets
 from datasets import interleave_datasets, load_dataset
 from torch.utils.data import Dataset
 
+from tokenkit.utils import preprocess_messages
+
 
 class JSONLDataset(Dataset):
     def __init__(self, path, lang_code, batch_size, n_subsample=None, seed=None):
@@ -49,8 +51,10 @@ class HFDataset:
         dataset_configs,
         mix_languages,
         batch_size,
+        streaming=True,
         n_subsample=None,
         shuffle_buffer_size=None,
+        num_workers=0,
         seed=1234,
     ):
         self.dataset_configs = dataset_configs
@@ -65,21 +69,39 @@ class HFDataset:
         self.dset_streams = {}
         self.probs = {}
 
+        if streaming:
+            process_kwargs = {}
+        else:
+            process_kwargs = {"num_proc": num_workers if num_workers > 0 else None}
+
         for config in dataset_configs:
             stream = load_dataset(
                 **config["kwargs"],
-                streaming=True,
+                streaming=streaming,
                 trust_remote_code=True,
             )
 
             if self.shuffle_buffer_size is not None:
-                stream = stream.shuffle(buffer_size=self.shuffle_buffer_size, seed=seed)
+                if streaming:
+                    stream = stream.shuffle(
+                        buffer_size=self.shuffle_buffer_size, seed=seed
+                    )
+                else:
+                    stream = stream.shuffle(seed=seed)
 
-            self.dset_streams[config["lang_code"]] = stream.map(
-                lambda x: {
-                    "text": x["text"],
+            def process_example(example):
+                if "messages" in example:
+                    text = preprocess_messages(example["messages"])
+                else:
+                    text = example["text"]
+
+                return {
+                    "text": text,
                     "lang_code": config["lang_code"],
                 }
+
+            self.dset_streams[config["lang_code"]] = stream.map(
+                process_example, **process_kwargs, remove_columns=stream.column_names
             )
 
             if "p" in config:
@@ -103,11 +125,11 @@ class HFDataset:
                 list(self.dset_streams.values()),
                 probabilities=list(self.probs.values()),
                 seed=seed,
-            ).batch(batch_size, drop_last_batch=True)
+            ).batch(batch_size, drop_last_batch=True, **process_kwargs)
         else:
             self.stream = interleave_datasets(
                 [
-                    s.batch(batch_size, drop_last_batch=True)
+                    s.batch(batch_size, drop_last_batch=True, **process_kwargs)
                     for s in self.dset_streams.values()
                 ],
                 probabilities=list(self.probs.values()),
@@ -206,3 +228,22 @@ def get_dataset(kind, **kwargs):
         return HFSavedDataset(**kwargs)
     else:
         raise ValueError("Invalid dataset kind")
+
+
+def test_load_tulu3():
+    dset = get_dataset(
+        "hf",
+        dataset_configs=[
+            {
+                "lang_code": "en",
+                "kwargs": {"path": "allenai/tulu-3-sft-mixture", "split": "train"},
+            }
+        ],
+        batch_size=16,
+        num_workers=16,
+        streaming=False,
+        mix_languages=False,
+    )
+    assert dset.get_texts(1)[0]["text"].startswith(
+        "<|<bos>|><|<start_header>|><|<user_name>|><|<end_header>|>"
+    )

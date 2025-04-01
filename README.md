@@ -15,7 +15,7 @@
 - [Features](#features)
     - [Cross-Tokenizer Distillation](#cross-tokenizer-distillation)
     - [Zero-Shot Tokenizer Transfer](#zero-shot-tokenizer-transfer)
-    - [Token-Level Ensembling & Evaluation](#token-level-ensembling--evaluation)
+    - [Token-Level Ensembling & Evaluating Transferred Models](#token-level-ensembling--evaluating-transferred-models)
 - [Citation](#citation)
 - [Acknowledgments](#acknowledgments)
 
@@ -77,7 +77,7 @@ You can run Zero-Shot Tokenizer Transfer using the [`scripts/zett.py`](scripts/z
 
 **🚧 We are working on implementing more ZeTT methods (including hypernetwork training introduced [here](https://arxiv.org/abs/2405.07883)).**
 
-### Token-Level Ensembling & Evaluation
+### Token-Level Ensembling & Evaluating Transferred Models
 
 `tokenkit` supports autoregressive generation & loglikelihood scoring evaluation by implementing a Jax backend to the [LM Evaluation Harness](https://github.com/EleutherAI/lm-evaluation-harness). Alongside generating from single models, you can also generate from *token-level ensembles* of models. There are some predefined ensembles in [`configs/models`](configs/models). For example, this evaluates a token-level ensemle of Llama and Qwen on MMLU: 
 

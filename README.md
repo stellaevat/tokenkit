@@ -98,7 +98,7 @@ python3 scripts/eval.py \
   eval.tasks=[mmlu]
 ```
 
-To evaluate any other model (for example, subword-to-subword transferred models), use for example the following:
+To evaluate any other model (e.g., subword-to-subword transferred models), use for example the following:
 
 ```bash
 python3 scripts/eval.py \

@@ -1,7 +1,7 @@
 <h1 align="center">tokenkit🔁</h1>
 <h3 align="center">Tokenization Transfer for LLMs</h3>
 
-![tokenkit](https://github.com/user-attachments/assets/a5d5e9a4-3df4-4552-aabc-400dcba1786e)
+![tokenkit](https://github.com/user-attachments/assets/976478c8-8994-4780-8d77-b429ec707932)
 
 `tokenkit` is a toolkit implementing advanced methods to transfer *models* and *model knowledge* across tokenizers.
 

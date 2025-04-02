@@ -16,6 +16,13 @@ def sentencepiece_byte_fallback_byte_fn(token: str) -> str:
         )
 
 
+def sentencepiece_byte_fallback_precedence_fn(token: str) -> int:
+    if token in BYTE_FALLBACK_MAP:
+        return 0
+    else:
+        return 1
+
+
 def identity_byte_fn(token: str) -> str:
     return token
 
@@ -34,6 +41,7 @@ class BaseModelKind(ABC):
 
     def __init__(self):
         self._byte_fallback_fn = identity_byte_fn
+        self._byte_fallback_precedence_fn = lambda x: 0
 
     @property
     @abstractmethod
@@ -52,6 +60,14 @@ class BaseModelKind(ABC):
     @byte_fallback_fn.setter
     def byte_fallback_fn(self, value: Callable[[str], str]):
         self._byte_fallback_fn = value
+
+    @property
+    def byte_fallback_precedence_fn(self) -> Callable[[str], int]:
+        return self._byte_fallback_precedence_fn
+
+    @byte_fallback_precedence_fn.setter
+    def byte_fallback_precedence_fn(self, value: Callable[[str], int]):
+        self._byte_fallback_precedence_fn = value
 
 
 class Qwen2ModelKind(BaseModelKind):
@@ -104,6 +120,7 @@ class Gemma2ModelKind(BaseModelKind):
     def __init__(self):
         super().__init__()
         self._byte_fallback_fn = sentencepiece_byte_fallback_byte_fn
+        self._byte_fallback_precedence_fn = sentencepiece_byte_fallback_precedence_fn
 
     @property
     def special_tokens(self) -> List[str]:

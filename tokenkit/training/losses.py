@@ -67,13 +67,13 @@ class LossArgs:
 def compute_distill_latents_loss(args, loss_args):
     if args.latents_chunks == "naive":
         alignment_matrix_b_last_only_index, _ = get_last_index_per_column(
-            loss_args.batch["alignment_matrix_b"]
+            loss_args.batch["alignment_matrix_b_unconstrained"]
         )
         alignment_matrix_a_last_only_index, mask = get_last_index_per_column(
-            loss_args.batch["alignment_matrix_a"]
+            loss_args.batch["alignment_matrix_a_unconstrained"]
         )
         _, global_mask = get_last_index_per_column(
-            loss_args.global_batch["alignment_matrix_a"]
+            loss_args.global_batch["alignment_matrix_a_unconstrained"]
         )
     elif args.latents_chunks == "space":
         alignment_matrix_b_last_only_index, _ = get_last_index_per_column(
@@ -230,10 +230,14 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     original_shift_labels = loss_args.batch["input_ids_original"][..., 1:]
 
     if chunk_kind == "unconstrained":
-        alignment_matrix_a = loss_args.batch["alignment_matrix_a"]
-        alignment_matrix_b = loss_args.batch["alignment_matrix_b"]
-        global_alignment_matrix_a = loss_args.global_batch["alignment_matrix_a"]
-        global_alignment_matrix_b = loss_args.global_batch["alignment_matrix_b"]
+        alignment_matrix_a = loss_args.batch["alignment_matrix_a_unconstrained"]
+        alignment_matrix_b = loss_args.batch["alignment_matrix_b_unconstrained"]
+        global_alignment_matrix_a = loss_args.global_batch[
+            "alignment_matrix_a_unconstrained"
+        ]
+        global_alignment_matrix_b = loss_args.global_batch[
+            "alignment_matrix_b_unconstrained"
+        ]
     elif chunk_kind == "unbiased":
         alignment_matrix_a = loss_args.batch["alignment_matrix_a_unbiased"]
         alignment_matrix_b = loss_args.batch["alignment_matrix_b_unbiased"]
@@ -531,11 +535,15 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
 def compute_alm_side_path_loss(
     chunk_kind, student_mapping, teacher_mapping, args, loss_args
 ):
-    if chunk_kind == "greedy":
-        alignment_matrix_a = loss_args.batch["alignment_matrix_a"]
-        alignment_matrix_b = loss_args.batch["alignment_matrix_b"]
-        global_alignment_matrix_a = loss_args.global_batch["alignment_matrix_a"]
-        global_alignment_matrix_b = loss_args.global_batch["alignment_matrix_b"]
+    if chunk_kind == "unconstrained":
+        alignment_matrix_a = loss_args.batch["alignment_matrix_a_unconstrained"]
+        alignment_matrix_b = loss_args.batch["alignment_matrix_b_unconstrained"]
+        global_alignment_matrix_a = loss_args.global_batch[
+            "alignment_matrix_a_unconstrained"
+        ]
+        global_alignment_matrix_b = loss_args.global_batch[
+            "alignment_matrix_b_unconstrained"
+        ]
     elif chunk_kind == "unbiased":
         alignment_matrix_a = loss_args.batch["alignment_matrix_a_unbiased"]
         alignment_matrix_b = loss_args.batch["alignment_matrix_b_unbiased"]
@@ -846,34 +854,34 @@ def compute_baseline_mined_loss(mined_mapping, args, loss_args):
     assert args.max_teacher_length == args.max_student_length
 
     alignment_matrix_a = (
-        loss_args.batch["alignment_matrix_a"]
+        loss_args.batch["alignment_matrix_a_unconstrained"]
         .at[:, :-1]
         .set(
-            loss_args.batch["alignment_matrix_a"][:, :-1]
+            loss_args.batch["alignment_matrix_a_unconstrained"][:, :-1]
             & loss_args.batch["loss_mask_new"][:, 1:, None]
         )
     )
     alignment_matrix_b = (
-        loss_args.batch["alignment_matrix_b"]
+        loss_args.batch["alignment_matrix_b_unconstrained"]
         .at[:, :-1]
         .set(
-            loss_args.batch["alignment_matrix_b"][:, :-1]
+            loss_args.batch["alignment_matrix_b_unconstrained"][:, :-1]
             & loss_args.batch["loss_mask_original"][:, 1:, None]
         )
     )
     global_alignment_matrix_a = (
-        loss_args.global_batch["alignment_matrix_a"]
+        loss_args.global_batch["alignment_matrix_a_unconstrained"]
         .at[:, :-1]
         .set(
-            loss_args.global_batch["alignment_matrix_a"][:, :-1]
+            loss_args.global_batch["alignment_matrix_a_unconstrained"][:, :-1]
             & loss_args.global_batch["loss_mask_new"][:, 1:, None]
         )
     )
     global_alignment_matrix_b = (
-        loss_args.global_batch["alignment_matrix_b"]
+        loss_args.global_batch["alignment_matrix_b_unconstrained"]
         .at[:, :-1]
         .set(
-            loss_args.global_batch["alignment_matrix_b"][:, :-1]
+            loss_args.global_batch["alignment_matrix_b_unconstrained"][:, :-1]
             & loss_args.global_batch["loss_mask_original"][:, 1:, None]
         )
     )

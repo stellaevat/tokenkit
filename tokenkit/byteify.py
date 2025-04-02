@@ -118,25 +118,32 @@ class ByteifyTokenizer:
                 "ByteifyTokenizer does not currently support sequence normalizers. Please open an issue / check existing issues."
             )
 
-        pad_token = next(
-            token
-            for token in [
-                self.tokenizer.pad_token,
-                self.tokenizer.unk_token,
-                self.tokenizer.eos_token,
-                self.tokenizer.bos_token,
-            ]
-            if token is not None
-        )
-        self.tokenizer.pad_token = pad_token
+        for special_token, name in [
+            ("pad_token", "<|<pad>|>"),
+            ("bos_token", "<|<bos>|>"),
+            ("eos_token", "<|<eos>|>"),
+        ]:
+            token_value = self.model_kind_cls.replacements[name]
+
+            if token_value is not None:
+                setattr(self.tokenizer, special_token, token_value[0])
+
         self.tokenizer.padding_side = "right"
 
         self.vocab = {}
+        self.precedences = {
+            v: self.model_kind_cls.byte_fallback_precedence_fn(k)
+            for k, v in self.tokenizer.vocab.items()
+        }
         self.inv_vocab = {}
 
         for k, v in self.tokenizer.vocab.items():
             byte_k = self.model_kind_cls.byte_fallback_fn(k)
-            if byte_k not in self.vocab:
+            # prioritize overlapping byte tokens via precedences (necessary e.g. for SentencePiece byte fallback)
+            if (
+                byte_k not in self.vocab
+                or self.precedences[v] > self.precedences[self.vocab[byte_k]]
+            ):
                 self.vocab[byte_k] = v
 
             self.inv_vocab[v] = byte_k

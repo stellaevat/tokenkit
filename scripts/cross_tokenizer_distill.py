@@ -456,12 +456,6 @@ def my_app(args: DictConfig) -> None:
     else:
         teacher_model_params = model_params
 
-    if args.debug:
-        model_params = param.strip_layers(model_params, student_config, 1)
-        teacher_model_params = param.strip_layers(
-            teacher_model_params, teacher_config, 1
-        )
-
     teacher_model = FlaxAutoModelForCausalLM.from_config(
         teacher_config,
         dtype=dtype,

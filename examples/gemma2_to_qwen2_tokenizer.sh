@@ -24,7 +24,7 @@ ipython --pdb scripts/cross_tokenizer_distill.py -- \
     eval.lengths=[128,256,512,1024,2048] \
     eval.tokens_per_batch=8192 \
     eval.add_bos=true \
-    data=tulu3_lfs \
+    data=tulu3 \
     data.batch_size=64 \
     data.num_workers=16 \
     ppl_eval_data.batch_size=64 \

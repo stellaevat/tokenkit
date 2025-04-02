@@ -13,4 +13,9 @@ pytest==8.3.5
 lingvo==0.12.7
 optax==0.2.4
 numpy==1.26.4
+fiddle==0.3.0
+jaxtyping==0.2.36
+typeguard==4.4.1
+jax-bitempered-loss==0.0.2
+editdistance==0.8.1
 git+https://github.com/google/CommonLoopUtils@307b0bc65ae2e2d801b6c19df2431c060a0aa4ec

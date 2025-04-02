@@ -125,7 +125,7 @@ Please use this citation for Zero-Shot Tokenizer Transfer:
 ```
 @inproceedings{zett,
 title={Zero-Shot Tokenizer Transfer},
-author={Benjamin Minixhofer and Edoardo Ponti and Ivan Vuli{\'c}},
+author={Benjamin Minixhofer and Ivan Vuli{\'c} and Edoardo Ponti},
 booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems},
 year={2024},
 url={https://openreview.net/forum?id=RwBObRsIzC}

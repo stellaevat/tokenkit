@@ -114,7 +114,7 @@ To refer to this repository or to cite Approximate Likelihood Matching, please u
 ```
 @article{alm,
   title={Cross-Tokenizer Distillation via Approximate Likelihood Matching},
-  author={Minixhofer, Benjamin and Ponti, Edoardo Maria and Vuli{\'c}, Ivan},
+  author={Minixhofer, Benjamin and Vuli{\'c}, Ivan and Ponti, Edoardo Maria},
   journal={arXiv preprint arXiv:2503.20083},
   year={2025}
 }
@@ -125,7 +125,7 @@ Please use this citation for Zero-Shot Tokenizer Transfer:
 ```
 @inproceedings{zett,
 title={Zero-Shot Tokenizer Transfer},
-author={Benjamin Minixhofer and Ivan Vuli{\'c} and Edoardo Ponti},
+author={Benjamin Minixhofer and Edoardo Ponti and Ivan Vuli{\'c}},
 booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems},
 year={2024},
 url={https://openreview.net/forum?id=RwBObRsIzC}

@@ -56,7 +56,6 @@ latents_do_project: false
 side_path_mapping_mode: null
 side_path_distance_fn: "kl"
 
-ignore_normalizer: false
 cover_mode: "append_space"
 tokenizer_pair_data_path: null
 tokenizer_pair_bias_threshold: 1e-4

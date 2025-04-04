@@ -81,9 +81,6 @@ def my_app(args: DictConfig) -> None:
 
         tokenizer = load_byteify_tokenizer(model_kwargs.pop("tokenizer_name"))
 
-        if args.ignore_normalizer:
-            tokenizer.backend_tokenizer.normalizer = None
-
         model = FlaxAutoModelForCausalLM.from_config(config, _do_init=False)
         params = param.load_params(
             pretrained_model_name_or_path=model_args.pretrained_model_name_or_path

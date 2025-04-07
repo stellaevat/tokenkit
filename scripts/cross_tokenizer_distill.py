@@ -1,42 +1,3 @@
-"""
-Example Usage:
-
-NAME=gemma_to_qwen_alm
-python cross_tokenizer_distill.py \
-    losses=[distill_main_path_pair-nobias] \
-    distill_main_path_diff_fn=binary_ce \
-    max_teacher_length=512 \
-    max_student_length=512 \
-    n_data_parallel=4 \
-    n_model_parallel=4 \
-    steps=20000 \
-    eval_interval=10000 \
-    save_interval=20000 \
-    optimizer.learning_rate=1e-5 \
-    optimizer.weight_decay=0.0 \
-    optimizer.max_grad_norm=null \
-    eval.tasks=[arc_easy,arc_challenge,piqa,hellaswag,boolq,arithmetic,mmlu] \
-    eval.lengths=[128,256,512,1024,2048] \
-    eval.tokens_per_batch=8192 \
-    eval.add_bos=true \
-    data.batch_size=64 \
-    ppl_eval_data.batch_size=16 \
-    log_interval=10 \
-    sync_interval=100 \
-    data=tulu3 \
-    use_chat_template=true \
-    student.pretrained_model_name_or_path="benjamin/gemma-2-2b-it-flax" \
-    student.tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2:target=Qwen2\' \
-    tokenizer_pair_data_path=outputs/tokenizer_data/old_source=Gemma2_target=Qwen2 \
-    tokenizer_pair_bias_threshold=1e-4 \
-    train_model_mode=lora \
-    model_lora_rank=64 \
-    model_lora_alpha=64 \
-    export_to_gcs_bucket=trc-transfer-autockpt \
-    num_workers=16 \
-    name=$NAME
-"""
-
 import json
 import logging
 import os
@@ -621,7 +582,7 @@ def my_app(args: DictConfig) -> None:
         loss_mask_mode=args.loss_mask_mode,
         tokenizer_pair_data_path=args.tokenizer_pair_data_path,
         tokenizer_pair_bias_threshold=args.tokenizer_pair_bias_threshold,
-        require_bias_matrices=[any("unbiased" in x for x in args.losses)],
+        require_bias_matrices=any("unbiased" in x for x in args.losses),
     )
 
     train_dataloader = StatefulDataLoader(
@@ -805,10 +766,10 @@ def my_app(args: DictConfig) -> None:
             for loss_idx, loss in enumerate(args.losses):
                 if loss == "clm":
                     current_loss = losses.compute_clm_loss(args, loss_args)
-                elif loss == "distill_latents":
-                    current_loss = losses.compute_distill_latents_loss(args, loss_args)
-                elif loss.startswith("distill_alm"):
-                    kind = loss[len("distill_alm_") :]
+                elif loss == "alm_latents":
+                    current_loss = losses.compute_alm_latents_loss(args, loss_args)
+                elif loss.startswith("alm"):
+                    kind = loss[len("alm_") :]
                     if len(kind) == 0:
                         kind = "unbiased"
                     current_loss = losses.compute_alm_loss(
@@ -816,8 +777,8 @@ def my_app(args: DictConfig) -> None:
                         args=args,
                         loss_args=loss_args,
                     )
-                elif loss.startswith("distill_alm_side_path"):
-                    kind = loss[len("distill_alm_side_path_") :]
+                elif loss.startswith("alm_side_path"):
+                    kind = loss[len("alm_side_path_") :]
                     if len(kind) == 0:
                         kind = "unbiased"
                     current_loss = losses.compute_alm_side_path_loss(

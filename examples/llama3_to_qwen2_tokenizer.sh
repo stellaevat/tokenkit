@@ -6,8 +6,8 @@
 
 NAME=llama3_to_qwen2_tokenizer
 ipython --pdb scripts/cross_tokenizer_distill.py -- \
-    losses=[distill_alm_unbiased] \
-    distill_main_path_diff_fn=binary_ce \
+    losses=[alm_unbiased] \
+    alm_diff_fn=binary_ce \
     max_teacher_length=512 \
     max_student_length=512 \
     n_data_parallel=1 \

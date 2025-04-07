@@ -1,13 +1,28 @@
+#!/bin/bash
+
 # Before running this script, you'll need to obtain the tokenizer bias data via
 # ipython --pdb scripts/compute_tokenizer_info.py -- \
 #     teacher_tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2\' \
 #     target_tokenizer_name=\'Qwen/Qwen2.5-1.5B:source=Qwen2:target=Gemma2\' \
 #     output=\'outputs/tokenizer_data/gemma2_to_qwen2_new\'
 
+if [ "$1" == "debug" ]; then
+    export JAX_DISABLE_JIT=1
+    export JAX_PLATFORMS=""
+    export WANDB_MODE=disabled
+    DEBUG=true
+else
+    DEBUG=false
+fi
+
+echo "DEBUG: $DEBUG"
+
 NAME=gemma2_to_qwen2_tokenizer
 ipython --pdb scripts/cross_tokenizer_distill.py -- \
-    losses=[distill_alm_unbiased] \
-    distill_main_path_diff_fn=binary_ce \
+    losses=[alm_greedy] \
+    debug=$DEBUG \
+    alm_mode="merge_by_space_prob+append_space" \
+    alm_diff_fn=binary_ce \
     max_teacher_length=512 \
     max_student_length=512 \
     n_data_parallel=1 \

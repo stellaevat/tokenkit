@@ -64,7 +64,7 @@ class LossArgs:
     scalar_report: Any
 
 
-def compute_distill_latents_loss(args, loss_args):
+def compute_alm_latents_loss(args, loss_args):
     if args.latents_chunks == "naive":
         alignment_matrix_b_last_only_index, _ = get_last_index_per_column(
             loss_args.batch["alignment_matrix_b_unconstrained"]
@@ -255,9 +255,9 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     else:
         raise ValueError(f"Unknown chunk kind: {chunk_kind}")
 
-    if args.distill_main_path_diff_fn == "abs":
+    if args.alm_diff_fn == "abs":
         diff_fn = lambda log_y_true, log_y_pred: jnp.abs(log_y_true - log_y_pred)
-    elif args.distill_main_path_diff_fn == "binary_ce":
+    elif args.alm_diff_fn == "binary_ce":
 
         def binary_ce(log_y_true, log_y_pred):
             log_y_true = (log_y_true.astype(jnp.float32) / args.bce_temp) - epsilon
@@ -269,7 +269,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             )
 
         diff_fn = binary_ce
-    elif args.distill_main_path_diff_fn == "reverse_binary_kl":
+    elif args.alm_diff_fn == "reverse_binary_kl":
 
         def reverse_binary_kl(log_y_true, log_y_pred):
             log_y_true = (log_y_true.astype(jnp.float32) / args.bce_temp) - epsilon
@@ -280,7 +280,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             )
 
         diff_fn = reverse_binary_kl
-    elif args.distill_main_path_diff_fn == "binary_kl_temp_limit":
+    elif args.alm_diff_fn == "binary_kl_temp_limit":
 
         def binary_kl_temp_limit(log_y_true, log_y_pred):
             log_y_true = log_y_true - epsilon
@@ -291,7 +291,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             )
 
         diff_fn = binary_kl_temp_limit
-    elif args.distill_main_path_diff_fn == "abs_exp":
+    elif args.alm_diff_fn == "abs_exp":
 
         def abs_exp(log_y_true, log_y_pred):
             log_y_true = (log_y_true.astype(jnp.float32) / args.bce_temp) - epsilon
@@ -300,7 +300,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             return jnp.abs(jnp.exp(log_y_true) - jnp.exp(log_y_pred))
 
         diff_fn = abs_exp
-    elif args.distill_main_path_diff_fn == "renyi":
+    elif args.alm_diff_fn == "renyi":
 
         def renyi(log_y_true, log_y_pred):
             log_y_true = log_y_true.astype(jnp.float32) - epsilon
@@ -374,7 +374,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         max=0.0,
     )
 
-    if "eos_as_space" in args.cover_mode:
+    if "eos_as_space" in args.alm_mode:
         t_space_logp = loss_args.teacher_logprobs[
             :, :, loss_args.tokenizer_teacher.eos_token_id
         ]
@@ -408,7 +408,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         max=0.0,
     )
 
-    if "eos_as_space" in args.cover_mode:
+    if "eos_as_space" in args.alm_mode:
         s_space_logp = loss_args.student_logprobs[
             :, :, loss_args.tokenizer_new.eos_token_id
         ]
@@ -424,6 +424,51 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
 
     aligned_count = alignment_matrix_b[:, 1:].sum(-2)
     global_aligned_count = global_alignment_matrix_b[:, 1:].sum(-2)
+
+    if "merge_by_space_prob" in args.alm_mode:
+        batch_size = t_aligned_space_logp.shape[0]
+        chunk_count = t_aligned_space_logp.shape[-1]
+
+        t_aligned_space_chunk_mask = jnp.exp(t_aligned_space_logp) > args.tokenizer_pair_bias_threshold
+        chunk_merging_indices = jnp.cumsum(t_aligned_space_chunk_mask[:, ::-1], -1)[:, ::-1]
+        chunk_merging_indices = chunk_merging_indices.max(-1, keepdims=True) - chunk_merging_indices
+        chunk_merging_matrix = (
+            jnp.zeros(
+                (
+                    batch_size * chunk_count,
+                    chunk_count,
+                ),
+                dtype=alignment_matrix_a.dtype,
+            )
+            .at[jnp.arange(batch_size * chunk_count), chunk_merging_indices.reshape(-1)]
+            .set(True)
+            .reshape((batch_size, chunk_count, chunk_count))
+        )
+        chunk_merging_matrix_last_only_index, _ = get_last_index_per_column(
+            chunk_merging_matrix
+        )
+
+        t_aligned_main_logp = jnp.squeeze(
+            jnp.matmul(t_aligned_main_logp[:, None], chunk_merging_matrix), 1
+        )
+        s_aligned_main_logp = jnp.squeeze(
+            jnp.matmul(s_aligned_main_logp[:, None], chunk_merging_matrix), 1
+        )
+        t_aligned_space_logp = jnp.take_along_axis(
+            t_aligned_space_logp, chunk_merging_matrix_last_only_index, axis=-1
+        )
+        s_aligned_space_logp = jnp.take_along_axis(
+            s_aligned_space_logp, chunk_merging_matrix_last_only_index, axis=-1
+        )
+
+        aligned_count = jnp.squeeze(aligned_count[:, None] @ chunk_merging_matrix, 1)
+        global_aligned_count = jnp.squeeze(
+            aligned_count[:, None] @ chunk_merging_matrix, 1  # NB: cant merge global chunks :(
+        )
+
+        loss_args.scalar_report["t_min_aligned_space_logp"] = (
+            t_aligned_space_logp * (aligned_count > 0)
+        ).min()
 
     s_aligned_main_logp = s_aligned_main_logp * (aligned_count > 0)
     t_aligned_space_logp = t_aligned_space_logp * (aligned_count > 0)
@@ -443,7 +488,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         size_count = aligned_count.reshape(batch_size, -1, size)
         global_size_count = global_aligned_count.reshape(global_batch_size, -1, size)
 
-        if "append_space" in args.cover_mode:
+        if "append_space" in args.alm_mode:
             last_position_in_chunk = (
                 jnp.cumsum((size_count > 0)[..., ::-1], axis=-1) == 1
             )[..., ::-1]
@@ -528,6 +573,8 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     )
 
     distill_main_path_loss = elementwise_loss.mean() / len(args.distill_chunk_sizes)
+
+    import ipdb; ipdb.set_trace()
 
     return distill_main_path_loss
 

@@ -1,6 +1,7 @@
 outputs
 tokenkit_env
 wandb
+artifacts
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

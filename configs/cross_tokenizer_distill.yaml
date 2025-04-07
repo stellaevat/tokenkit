@@ -38,7 +38,7 @@ ema_alpha: 0.95
 bce_temp: 100.0
 
 distill_chunk_sizes: [1]
-distill_main_path_diff_fn: "binary_ce"
+alm_diff_fn: "binary_ce"
 distill_main_path_numerator: "chunk_count"
 distill_main_path_denominator: "chunk_count"
 train_model_mode: "lora"
@@ -56,7 +56,7 @@ latents_do_project: false
 side_path_mapping_mode: null
 side_path_distance_fn: "kl"
 
-cover_mode: "append_space"
+alm_mode: "append_space"
 tokenizer_pair_data_path: null
 tokenizer_pair_bias_threshold: 1e-4
 tokenizer_pair_bias_threshold_side_path: null

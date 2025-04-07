@@ -432,6 +432,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         t_aligned_space_chunk_mask = jnp.exp(t_aligned_space_logp) > args.tokenizer_pair_bias_threshold
         chunk_merging_indices = jnp.cumsum(t_aligned_space_chunk_mask[:, ::-1], -1)[:, ::-1]
         chunk_merging_indices = chunk_merging_indices.max(-1, keepdims=True) - chunk_merging_indices
+        chunk_merging_values = aligned_count > 0
         chunk_merging_matrix = (
             jnp.zeros(
                 (
@@ -441,7 +442,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
                 dtype=alignment_matrix_a.dtype,
             )
             .at[jnp.arange(batch_size * chunk_count), chunk_merging_indices.reshape(-1)]
-            .set(True)
+            .set(chunk_merging_values.reshape(-1))
             .reshape((batch_size, chunk_count, chunk_count))
         )
         chunk_merging_matrix_last_only_index, _ = get_last_index_per_column(
@@ -573,8 +574,6 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     )
 
     distill_main_path_loss = elementwise_loss.mean() / len(args.distill_chunk_sizes)
-
-    import ipdb; ipdb.set_trace()
 
     return distill_main_path_loss
 

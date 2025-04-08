@@ -229,6 +229,14 @@ def label_by_prefix(pytree, label_maps, default=None):
     return traverse_util.unflatten_dict(labels)
 
 
+def remove_none(pytree):
+    flat_pytree = traverse_util.flatten_dict(pytree)
+    for k in flat_pytree:
+        if flat_pytree[k] is None:
+            del flat_pytree[k]
+    return traverse_util.unflatten_dict(flat_pytree)
+
+
 def get_n_pad(n, pad_to_multiple_of):
     n_overflow = n % pad_to_multiple_of
     if n_overflow > 0:

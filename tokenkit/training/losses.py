@@ -208,14 +208,14 @@ def compute_alm_latents_loss(args, loss_args):
     return loss
 
 
-def compute_clm_loss(args, loss_args):
-    clm_loss = cross_entropy(
+def compute_sft_loss(args, loss_args):
+    sft_loss = cross_entropy(
         loss_args.student_logits,
         loss_args.batch["input_ids_new"],
         loss_args.batch["loss_mask_new"],
         denom=loss_args.global_batch["loss_mask_new"][:, 1:].mean(),
     )
-    return clm_loss
+    return sft_loss
 
 
 def log1mexp(x):

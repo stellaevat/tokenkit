@@ -6,7 +6,7 @@ max_student_length: 2048
 steps: 50_000
 warmup_steps: 2_000
 name: "unnamed"
-output: "outputs/patch"
+output: "outputs/cross_tokenizer_distill"
 num_workers: 16
 log_interval: 10
 sync_interval: 100
@@ -87,10 +87,6 @@ hypernet:
 
 n_prefix_layers: 0
 n_suffix_layers: 0
-
-prefix_steps: 0
-prefix_lr: 0.0
-prefix_trainable: "non_overlapping_embeddings"
 
 optimizer:
   learning_rate: 3e-5

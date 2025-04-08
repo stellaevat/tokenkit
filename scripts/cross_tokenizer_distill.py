@@ -512,8 +512,8 @@ def my_app(args: DictConfig) -> None:
         optimizer_kwargs.pop("learning_rate"),
         args.steps,
         args.warmup_steps,
-        args.prefix_steps,
-        args.prefix_lr,
+        0,
+        0,
     )
 
     shard_patterns = {
@@ -648,7 +648,14 @@ def my_app(args: DictConfig) -> None:
         return inputs_embeds
 
     def train_step(state, batch, global_batch):
-        def compute_loss(params, aggregate_losses=True):
+        def compute_loss(trainable_params, non_trainable_params, aggregate_losses=True):
+            params = jax.tree.map(
+                lambda x, y: x if y is None else y,
+                trainable_params,
+                non_trainable_params,
+                is_leaf=lambda x: x is None,
+            )
+
             scalar_report = {}  # extra logging
 
             if args.train_model_mode == "lora":
@@ -672,7 +679,7 @@ def my_app(args: DictConfig) -> None:
                 config=teacher_config,
             )
 
-            need_teacher = len([loss for loss in args.losses if loss != "clm"]) > 0
+            need_teacher = len([loss for loss in args.losses if loss != "sft"]) > 0
             if need_teacher:
                 teacher_out = teacher_model_fn(
                     input_ids=batch["input_ids_original"],
@@ -764,8 +771,8 @@ def my_app(args: DictConfig) -> None:
             loss_ema_stats = state.loss_ema_stats
 
             for loss_idx, loss in enumerate(args.losses):
-                if loss == "clm":
-                    current_loss = losses.compute_clm_loss(args, loss_args)
+                if loss == "sft":
+                    current_loss = losses.compute_sft_loss(args, loss_args)
                 elif loss == "alm_latents":
                     current_loss = losses.compute_alm_latents_loss(args, loss_args)
                 elif loss.startswith("alm"):
@@ -832,9 +839,8 @@ def my_app(args: DictConfig) -> None:
                 elif args.loss_weight_mode == "uncertainty":
                     uncertainty_s = params["loss_weights"][loss_idx]
                     loss_values = loss_values.at[loss_idx].set(
-                        weight * current_loss * jnp.exp(-uncertainty_s) + (
-                            uncertainty_s / 2
-                        )
+                        weight * current_loss * jnp.exp(-uncertainty_s)
+                        + (uncertainty_s / 2)
                     )
                     scalar_report[f"loss/uncertainty_s_{loss}"] = uncertainty_s
                 elif args.loss_weight_mode == "ema":
@@ -870,37 +876,74 @@ def my_app(args: DictConfig) -> None:
                     loss_values = loss_values.at[loss_idx].set(weight * current_loss)
 
             if aggregate_losses:
-                return jnp.sum(loss_values), (scalar_report, loss_ema_stats, loss_values)
+                return jnp.sum(loss_values), (
+                    scalar_report,
+                    loss_ema_stats,
+                    loss_values,
+                )
             else:
                 return loss_values, (scalar_report, loss_ema_stats, loss_values)
 
+        trainable_params = jax.tree.map(
+            lambda x, m: x if m else None, state.params, state.train_mask
+        )
+        non_trainable_params = jax.tree.map(
+            lambda x, m: x if not m else None, state.params, state.train_mask
+        )
+
         if args.multitask_aggregation_fn is None:
             grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-            (loss, (scalar_report, loss_ema_stats, _)), grad = grad_fn(state.params)
+            (loss, (scalar_report, loss_ema_stats, _)), grad = grad_fn(
+                trainable_params, non_trainable_params
+            )
         else:
-            jac_fn = jax.jacrev(partial(compute_loss, aggregate_losses=False), has_aux=True)
-            (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(state.params)
-    
-            if args.multitask_aggregation_fn == "pcgrad":
-                grads = multitask.pcgrad(grads)
-            elif args.multitask_aggregation_fn == "gradmag":
-                grads = multitask.gradmag(grads)
-            else:
-                raise ValueError(f"Invalid multitask aggregation function: {args.multitask_aggregation_fn}")
+            jac_fn = jax.jacrev(
+                partial(compute_loss, aggregate_losses=False), has_aux=True
+            )
+            (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(
+                trainable_params, non_trainable_params
+            )
 
+            global_grad_norms_before_agg = multitask.compute_global_grad_norm(grads)
+
+            mt_agg_fns = args.multitask_aggregation_fn.split("+")
+            for mt_agg_fn in mt_agg_fns:
+                mt_agg_args = mt_agg_fn.split(":")
+                mt_agg_fn = mt_agg_args[0]
+                mt_agg_extra_args = tuple(json.loads(x) for x in mt_agg_args[1:])
+
+                if mt_agg_fn == "pcgrad":
+                    grads = multitask.pcgrad(grads, *mt_agg_extra_args)
+                elif mt_agg_fn == "gradmag":
+                    grads = multitask.gradmag(grads, *mt_agg_extra_args)
+                elif mt_agg_fn == "gradclip":
+                    grads = multitask.gradclip(grads, *mt_agg_extra_args)
+                elif mt_agg_fn == "identity":
+                    pass
+                else:
+                    raise ValueError(
+                        f"Invalid multitask aggregation function: {mt_agg_fn}"
+                    )
+
+            global_grad_norms_after_agg = multitask.compute_global_grad_norm(grads)
+
+            for loss_idx, loss in enumerate(args.losses):
+                scalar_report[f"loss/{loss}_loss_value"] = loss_values[loss_idx]
+                scalar_report[f"loss/{loss}_global_grad_norm_before_agg"] = (
+                    global_grad_norms_before_agg[loss_idx]
+                )
+                scalar_report[f"loss/{loss}_global_grad_norm_after_agg"] = (
+                    global_grad_norms_after_agg[loss_idx]
+                )
+
+            grad = jax.tree.map(lambda task_grads: jnp.sum(task_grads, axis=0), grads)
             loss = jnp.sum(loss_values)
 
-        def prefix_freeze(grad):
-            for key in grad:
-                if key not in {"new_embeddings"}:
-                    grad[key] = jax.tree.map(lambda x: jnp.zeros_like(x), grad[key])
-
-            grad["new_embeddings"] *= ~overlapping_embeddings_mask[:, None, None]
-
-            return grad
-
-        grad = jax.lax.cond(
-            state.step < args.prefix_steps, prefix_freeze, lambda grad: grad, grad
+        grad = jax.tree.map(
+            lambda g, p: g if g is not None else jnp.zeros_like(p),
+            grad,
+            state.params,
+            is_leaf=lambda x: x is None,
         )
         new_state = state.apply_gradients(grads=grad, loss_ema_stats=loss_ema_stats)
 

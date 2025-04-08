@@ -62,18 +62,12 @@ tokenizer_pair_bias_threshold: 1e-4
 tokenizer_pair_bias_threshold_side_path: null
 
 add_expanded_input_ids: false
-expanded_input_ids_projection_alpha: null
 
 data:
   batch_size: 16
   num_workers: 16
 
-ppl_eval_data:
-  kind: "jsonl"
-  path: "artifacts/fineweb-edu-texts-xsmall.jsonl"
-  lang_code: "en"
-  n_subsample: 1000
-  batch_size: 16
+ppl_eval_data: null
 
 export_to_gcs_bucket: null
 

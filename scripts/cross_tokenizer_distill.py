@@ -360,7 +360,10 @@ def my_app(args: DictConfig) -> None:
 
     # prepare dataset
     dataset = data.get_dataset(**args.data, seed=args.seed)
-    ppl_eval_data = data.get_dataset(**args.ppl_eval_data, seed=args.seed)
+    if args.ppl_eval_data is not None:
+        ppl_eval_data = data.get_dataset(**args.ppl_eval_data, seed=args.seed)
+    else:
+        ppl_eval_data = None
 
     student_model_kwargs = dict(args.student)
     teacher_model_kwargs = (
@@ -591,12 +594,15 @@ def my_app(args: DictConfig) -> None:
         num_workers=args.num_workers,
         collate_fn=collator,
     )
-    ppl_eval_dataloader = torch.utils.data.DataLoader(
-        ppl_eval_data.get_torch_dataset(),
-        batch_size=1,
-        num_workers=args.num_workers,
-        collate_fn=collator,
-    )
+    if ppl_eval_data is not None:
+        ppl_eval_dataloader = torch.utils.data.DataLoader(
+            ppl_eval_data.get_torch_dataset(),
+            batch_size=1,
+            num_workers=args.num_workers,
+            collate_fn=collator,
+        )
+    else:
+        ppl_eval_dataloader = None
 
     if jax.process_index() == 0:
         wandb.init(project="tokenkit", name=args.name, config=OmegaConf.to_object(args))
@@ -1075,10 +1081,11 @@ def my_app(args: DictConfig) -> None:
             step == 0 and args.eval_at_step_zero
         ):
             # TODO: probably extract into eval function doing everything here
-            logger.info("PPL Eval:")
-            ppl_metrics = eval_loop(ppl_eval_dataloader)
-            ppl_metrics = {f"eval_{k}": v for k, v in ppl_metrics.items()}
-            utils.log(ppl_metrics, step=step + 1)
+            if ppl_eval_dataloader is not None:
+                logger.info("PPL Eval:")
+                ppl_metrics = eval_loop(ppl_eval_dataloader)
+                ppl_metrics = {f"eval_{k}": v for k, v in ppl_metrics.items()}
+                utils.log(ppl_metrics, step=step + 1)
 
             if not args.skip_lm_eval:
                 original_vocab = tokenizer_student_original.get_vocab()

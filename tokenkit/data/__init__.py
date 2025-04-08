@@ -3,6 +3,7 @@ import math
 import datasets
 from datasets import interleave_datasets, load_dataset
 from torch.utils.data import Dataset
+from functools import partial
 
 from tokenkit.utils import preprocess_messages
 
@@ -45,6 +46,18 @@ class JSONLDataset(Dataset):
 
     def get_torch_dataset(self):
         return self.dset
+
+
+def process_example(example, lang_code):
+    if "messages" in example:
+        text = preprocess_messages(example["messages"])
+    else:
+        text = example["text"]
+
+    return {
+        "text": text,
+        "lang_code": lang_code,
+    }
 
 
 class HFDataset:
@@ -91,19 +104,8 @@ class HFDataset:
                 else:
                     stream = stream.shuffle(seed=seed)
 
-            def process_example(example):
-                if "messages" in example:
-                    text = preprocess_messages(example["messages"])
-                else:
-                    text = example["text"]
-
-                return {
-                    "text": text,
-                    "lang_code": config["lang_code"],
-                }
-
             self.dset_streams[config["lang_code"]] = stream.map(
-                process_example, **process_kwargs, remove_columns=stream.column_names
+                partial(process_example, lang_code=config["lang_code"]), **process_kwargs, remove_columns=stream.column_names
             )
 
             if "p" in config:

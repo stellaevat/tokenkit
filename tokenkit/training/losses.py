@@ -429,9 +429,15 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         batch_size = t_aligned_space_logp.shape[0]
         chunk_count = t_aligned_space_logp.shape[-1]
 
-        t_aligned_space_chunk_mask = jnp.exp(t_aligned_space_logp) > args.tokenizer_pair_bias_threshold
-        chunk_merging_indices = jnp.cumsum(t_aligned_space_chunk_mask[:, ::-1], -1)[:, ::-1]
-        chunk_merging_indices = chunk_merging_indices.max(-1, keepdims=True) - chunk_merging_indices
+        t_aligned_space_chunk_mask = (
+            jnp.exp(t_aligned_space_logp) > args.tokenizer_pair_bias_threshold
+        )
+        chunk_merging_indices = jnp.cumsum(t_aligned_space_chunk_mask[:, ::-1], -1)[
+            :, ::-1
+        ]
+        chunk_merging_indices = (
+            chunk_merging_indices.max(-1, keepdims=True) - chunk_merging_indices
+        )
         chunk_merging_values = aligned_count > 0
         chunk_merging_matrix = (
             jnp.zeros(
@@ -464,7 +470,8 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
 
         aligned_count = jnp.squeeze(aligned_count[:, None] @ chunk_merging_matrix, 1)
         global_aligned_count = jnp.squeeze(
-            aligned_count[:, None] @ chunk_merging_matrix, 1  # NB: cant merge global chunks :(
+            aligned_count[:, None] @ chunk_merging_matrix,
+            1,  # NB: cant merge global chunks :(
         )
 
         loss_args.scalar_report["t_min_aligned_space_logp"] = (

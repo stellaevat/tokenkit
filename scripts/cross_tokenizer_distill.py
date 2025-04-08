@@ -31,7 +31,7 @@ from tokenkit import data, eval, gcs_utils, utils
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.models import lora, param, sharding
 from tokenkit.models.hypernet import Hypernet
-from tokenkit.training import checkpoint, collators, losses, lr, opt
+from tokenkit.training import checkpoint, collators, losses, lr, opt, multitask
 from tokenkit.utils import tqdm
 
 logger = logging.getLogger(__name__)
@@ -648,7 +648,7 @@ def my_app(args: DictConfig) -> None:
         return inputs_embeds
 
     def train_step(state, batch, global_batch):
-        def compute_loss(params):
+        def compute_loss(params, aggregate_losses=True):
             scalar_report = {}  # extra logging
 
             if args.train_model_mode == "lora":
@@ -760,7 +760,7 @@ def my_app(args: DictConfig) -> None:
                 scalar_report=scalar_report,
             )
 
-            total_loss = 0.0
+            loss_values = jnp.zeros(len(args.losses), dtype=jnp.float32)
             loss_ema_stats = state.loss_ema_stats
 
             for loss_idx, loss in enumerate(args.losses):
@@ -826,13 +826,15 @@ def my_app(args: DictConfig) -> None:
                 scalar_report[f"loss/{loss}_weight"] = weight
 
                 if args.loss_weight_mode == "balance":
-                    total_loss += (
+                    loss_values = loss_values.at[loss_idx].set(
                         weight * current_loss / jax.lax.stop_gradient(current_loss)
                     )
                 elif args.loss_weight_mode == "uncertainty":
                     uncertainty_s = params["loss_weights"][loss_idx]
-                    total_loss += weight * current_loss * jnp.exp(-uncertainty_s) + (
-                        uncertainty_s / 2
+                    loss_values = loss_values.at[loss_idx].set(
+                        weight * current_loss * jnp.exp(-uncertainty_s) + (
+                            uncertainty_s / 2
+                        )
                     )
                     scalar_report[f"loss/uncertainty_s_{loss}"] = uncertainty_s
                 elif args.loss_weight_mode == "ema":
@@ -863,14 +865,30 @@ def my_app(args: DictConfig) -> None:
                     scalar_report[f"loss/{loss}_normalized"] = normalized_loss
                     scalar_report[f"loss/{loss}_ema_mean"] = loss_ema_stats[loss_idx, 0]
                     scalar_report[f"loss/{loss}_ema_var"] = loss_ema_stats[loss_idx, 1]
-                    total_loss += weight * normalized_loss
+                    loss_values = loss_values.at[loss_idx].set(weight * normalized_loss)
                 else:
-                    total_loss += weight * current_loss
+                    loss_values = loss_values.at[loss_idx].set(weight * current_loss)
 
-            return total_loss, (scalar_report, loss_ema_stats)
+            if aggregate_losses:
+                return jnp.sum(loss_values), (scalar_report, loss_ema_stats, loss_values)
+            else:
+                return loss_values, (scalar_report, loss_ema_stats, loss_values)
 
-        grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-        (loss, (scalar_report, loss_ema_stats)), grad = grad_fn(state.params)
+        if args.multitask_aggregation_fn is None:
+            grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
+            (loss, (scalar_report, loss_ema_stats, _)), grad = grad_fn(state.params)
+        else:
+            jac_fn = jax.jacrev(partial(compute_loss, aggregate_losses=False), has_aux=True)
+            (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(state.params)
+    
+            if args.multitask_aggregation_fn == "pcgrad":
+                grads = multitask.pcgrad(grads)
+            elif args.multitask_aggregation_fn == "gradmag":
+                grads = multitask.gradmag(grads)
+            else:
+                raise ValueError(f"Invalid multitask aggregation function: {args.multitask_aggregation_fn}")
+
+            loss = jnp.sum(loss_values)
 
         def prefix_freeze(grad):
             for key in grad:

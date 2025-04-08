@@ -34,6 +34,7 @@ loss_weight_mode: null
 uncertainty_s_init: 0
 loss_schedules: null
 ema_alpha: 0.95
+multitask_aggregation_fn: null
 
 bce_temp: 100.0
 

@@ -968,10 +968,10 @@ def main(args: CrossTokenizerDistillArgs):
                 return loss_values, (scalar_report, loss_ema_stats, loss_values)
 
         trainable_params = jax.tree.map(
-            lambda x, m: x if m else None, state.params, state.train_mask
+            lambda x, m: x if m else None, state.params, train_mask
         )
         non_trainable_params = jax.tree.map(
-            lambda x, m: x if not m else None, state.params, state.train_mask
+            lambda x, m: x if not m else None, state.params, train_mask
         )
 
         if args.multitask_aggregation_fn is None:

@@ -96,7 +96,7 @@ def parse_args(cls):
             try:
                 value = json.loads(override[first_equals + 1 :])
             except json.JSONDecodeError:
-                raise ValueError(f"Invalid JSON: {override[first_equals + 1 :]}")
+                value = override[first_equals + 1 :]
 
             current = args
             for k in key[:-1]:

@@ -85,8 +85,8 @@ def expand_input_ids(
         if use_heuristic:
             # use a heuristic for pretokenization with 100% recall to narrow down possible candidates
             starts_with_space = [
-                token == tokenizer.pad_token or (len(token) > 0 and token[0] == "Ġ")
-                for token in tokens_new
+                token_id == tokenizer.pad_token_id or (len(token) > 0 and token[0] == "Ġ")
+                for token_id, token in zip(input_ids_new[example_index], tokens_new)
             ]
         else:
             starts_with_space = None

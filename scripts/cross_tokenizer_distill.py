@@ -858,15 +858,6 @@ def main(args: CrossTokenizerDistillArgs):
                     current_loss = losses.compute_sft_loss(args, loss_args)
                 elif loss == "alm_latents":
                     current_loss = losses.compute_alm_latents_loss(args, loss_args)
-                elif loss.startswith("alm"):
-                    kind = loss[len("alm_") :]
-                    if len(kind) == 0:
-                        kind = "unbiased"
-                    current_loss = losses.compute_alm_loss(
-                        chunk_kind=kind,
-                        args=args,
-                        loss_args=loss_args,
-                    )
                 elif loss.startswith("alm_side_path"):
                     kind = loss[len("alm_side_path_") :]
                     if len(kind) == 0:
@@ -878,6 +869,15 @@ def main(args: CrossTokenizerDistillArgs):
                         args=args,
                         loss_args=loss_args,
                     )
+                elif loss.startswith("alm"):
+                    kind = loss[len("alm_") :]
+                    if len(kind) == 0:
+                        kind = "unbiased"
+                    current_loss = losses.compute_alm_loss(
+                        chunk_kind=kind,
+                        args=args,
+                        loss_args=loss_args,
+                    )
                 elif loss == "baseline_dskd":
                     current_loss = losses.compute_baseline_dskd_loss(args, loss_args)
                 elif loss == "baseline_uld":
@@ -886,6 +886,8 @@ def main(args: CrossTokenizerDistillArgs):
                     current_loss = losses.compute_baseline_mined_loss(
                         mined_mapping, args, loss_args
                     )
+                else:
+                    raise ValueError(f"Invalid loss: {loss}")
 
                 weight = (
                     args.loss_weights[loss_idx]

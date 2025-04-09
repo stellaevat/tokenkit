@@ -89,28 +89,29 @@ def parse_args(cls):
 
     (args,) = HfArgumentParser([cls]).parse_yaml_file(meta_args.config)
 
-    for override in meta_args.overrides:
-        first_equals = override.find("=")
-        key = override[:first_equals].split(".")
-        try:
-            value = json.loads(override[first_equals + 1 :])
-        except json.JSONDecodeError:
-            raise ValueError(f"Invalid JSON: {override[first_equals + 1 :]}")
+    for overrides in meta_args.overrides:
+        for override in overrides.split():
+            first_equals = override.find("=")
+            key = override[:first_equals].split(".")
+            try:
+                value = json.loads(override[first_equals + 1 :])
+            except json.JSONDecodeError:
+                raise ValueError(f"Invalid JSON: {override[first_equals + 1 :]}")
 
-        current = args
-        for k in key[:-1]:
+            current = args
+            for k in key[:-1]:
+                if isinstance(current, list):
+                    current = current[int(k)]
+                elif isinstance(current, dict):
+                    current = current[k]
+                else:
+                    current = getattr(current, k)
+
             if isinstance(current, list):
-                current = current[int(k)]
+                current[int(key[-1])] = value
             elif isinstance(current, dict):
-                current = current[k]
+                current[key[-1]] = value
             else:
-                current = getattr(current, k)
-
-        if isinstance(current, list):
-            current[int(key[-1])] = value
-        elif isinstance(current, dict):
-            current[key[-1]] = value
-        else:
-            setattr(current, key[-1], value)
+                setattr(current, key[-1], value)
 
     return restore_dataclasses(args, cls)

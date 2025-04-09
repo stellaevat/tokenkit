@@ -321,6 +321,19 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             return jnp.logaddexp(term1, term2) / (args.renyi_alpha - 1)
 
         diff_fn = renyi
+    elif args.alm_diff_fn == "joschu_k2":
+        def joschu_k2(log_y_true, log_y_pred):
+            logr = (log_y_true - log_y_pred) / args.bce_temp
+            return (logr ** 2) / 2
+
+        diff_fn = joschu_k2
+    elif args.alm_diff_fn == "joschu_k3":
+        def joschu_k3(log_y_true, log_y_pred):
+            logr = (log_y_true - log_y_pred) / args.bce_temp
+
+            return (jnp.exp(logr) - 1) - logr
+
+        diff_fn = joschu_k3
     else:
         raise NotImplementedError(f"Unknown diff function: {args.diff_fn}")
 

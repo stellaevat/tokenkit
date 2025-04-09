@@ -1,7 +1,7 @@
 from dataclasses import dataclass, fields, is_dataclass
 from transformers import HfArgumentParser
 from argparse import ArgumentParser
-import json
+import yaml
 
 
 @dataclass
@@ -94,9 +94,9 @@ def parse_args(cls):
             first_equals = override.find("=")
             key = override[:first_equals].split(".")
             try:
-                value = json.loads(override[first_equals + 1 :])
-            except json.JSONDecodeError:
-                value = override[first_equals + 1 :]
+                value = yaml.safe_load(override[first_equals + 1 :])
+            except yaml.YAMLError:
+                raise ValueError(f"Invalid YAML: {override[first_equals + 1 :]}")
 
             current = args
             for k in key[:-1]:

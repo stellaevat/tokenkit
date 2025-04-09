@@ -1,9 +1,4 @@
-dtype: bfloat16
-debug: false
-seed: 1234
-max_teacher_length: 512
-max_student_length: 2048
-steps: 50_000
+steps: 5_000
 warmup_steps: 2_000
 name: "unnamed"
 output: "outputs/cross_tokenizer_distill"
@@ -12,71 +7,37 @@ log_interval: 10
 sync_interval: 100
 eval_interval: 5000
 save_interval: 5000
-pad_to_multiple_of: 64
-eval_at_step_zero: false
-save_at_step_zero: false
-skip_lm_eval: false
-output_embeddings_mode: "preserve"
-special_tokens_mode: "ignore_pad"
-use_chat_template: true
-chat_template_mode: direct_encode
-loss_mask_mode: null
-gradient_checkpointing: false
-do_cost_analysis: false
-dry_run: false
+losses: [alm_unbiased]
+target_tokenizer_name: "Qwen/Qwen2.5-1.5B:source=Qwen2:target=Gemma2"
 
-n_data_parallel: 1
-n_model_parallel: 8
-
-losses: [distill_main_path]
-loss_weights: null
-loss_weight_mode: null
-uncertainty_s_init: 0
-loss_schedules: null
-ema_alpha: 0.95
-multitask_aggregation_fn: null
-
-bce_temp: 100.0
-
-distill_chunk_sizes: [1]
-alm_diff_fn: "binary_ce"
-distill_main_path_numerator: "chunk_count"
-distill_main_path_denominator: "chunk_count"
 train_model_mode: "lora"
 model_lora_rank: 64
 model_lora_alpha: 64
 train_embeddings: true
-target_tokenizer: longest_prefix # 'longest_prefix', 'byte' or path to tokenizer
-tokens_to_add: null
 
-latents_to_align: "last_hidden_state"
-latents_normalization: "l2_channelwise"
-latents_chunks: "naive"
-latents_do_project: false
-
-side_path_mapping_mode: null
-side_path_distance_fn: "kl"
-
+bce_temp: 100.0
+alm_diff_fn: "binary_ce"
 alm_mode: "append_space"
-tokenizer_pair_data_path: null
-tokenizer_pair_bias_threshold: 1e-4
+tokenizer_pair_data_path: "artifacts/tokenizer_data/gemma2_to_qwen2"
+tokenizer_pair_bias_threshold: 1.e-4
 tokenizer_pair_bias_threshold_side_path: null
 
-add_expanded_input_ids: false
-expanded_input_ids_projection_alpha: null
+student:
+  pretrained_model_name_or_path: "benjamin/gemma-2-2b-it-flax"
+  tokenizer_name: "google/gemma-2-2b-it:source=Gemma2"
 
 data:
   batch_size: 16
   num_workers: 16
-
-ppl_eval_data:
-  kind: "jsonl"
-  path: "artifacts/fineweb-edu-texts-xsmall.jsonl"
-  lang_code: "en"
-  n_subsample: 1000
-  batch_size: 16
-
-export_to_gcs_bucket: null
+  kind: "hf"
+  mix_languages: false
+  streaming: false
+  shuffle_buffer_size: "inf"
+  dataset_configs:
+    - lang_code: en
+      kwargs: 
+        path: allenai/tulu-3-sft-mixture
+        split: train
 
 hypernet:
   architecture: transformer
@@ -85,30 +46,23 @@ hypernet:
   residual_alpha: 1
   use_attention: false
 
-n_prefix_layers: 0
-n_suffix_layers: 0
-
 optimizer:
-  learning_rate: 3e-5
+  type: adamw
+  weight_decay: 0.01
+  b1: 0.9
+  b2: 0.95
+  eps: 1.e-8
+  grad_acc_steps: null
+  learning_rate: 1.e-5
   max_grad_norm: 1.0
   param_groups:
     - pattern: .*(projector_query|projector_s2t|projector_t2s|projector_latents|loss_weights).*
       lr_scale: 2
 
-baseline:
-  divergence: "srkl"
-  dskd_use_causal_attention_mask: false
-  adaptive_kl_alpha: 0.5
-  skew_lambda: 0.1
-  teacher_temperature: 1.0
-  kd_rate: 0.5
-  kd_temp: 2.0
-
 eval:
-  tasks: ["piqa", "hellaswag", "arc_easy"]
-
-defaults:
-  - _self_
-  - data: tulu3
-  - eval: default
-  - optimizer: adamw
+  tasks: [arc_easy,arc_challenge,piqa,hellaswag,boolq,arithmetic,mmlu]
+  lengths: [128, 256, 512, 1024, 2048]
+  tokens_per_batch: 8192
+  add_bos: true
+  chat_template_mode: surround_instruct
+  confirm_run_unsafe_code: true

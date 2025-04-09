@@ -15,7 +15,6 @@ class TokenizerAlignerCollator:
         tokenizer_new,
         max_teacher_length,
         max_student_length,
-        special_tokens_mode,
         with_expanded_input_ids=False,
         use_chat_template=False,
         chat_template_mode="direct_encode",
@@ -29,7 +28,6 @@ class TokenizerAlignerCollator:
         self.tokenizer_new = tokenizer_new
         self.max_teacher_length = max_teacher_length
         self.max_student_length = max_student_length
-        self.special_tokens_mode = special_tokens_mode
         self.with_expanded_input_ids = with_expanded_input_ids
         self.use_chat_template = use_chat_template
         self.chat_template_mode = chat_template_mode

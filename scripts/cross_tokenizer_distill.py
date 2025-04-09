@@ -9,9 +9,10 @@ from functools import partial
 from pathlib import Path
 from pprint import pformat
 from typing import Any
+from dataclasses import dataclass, asdict, field
+import yaml
 
 import datasets
-import hydra
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,12 +23,11 @@ from flax.training import common_utils, train_state
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from omegaconf import DictConfig, OmegaConf
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoConfig, FlaxAutoModelForCausalLM
 
 import wandb
-from tokenkit import data, eval, gcs_utils, utils
+from tokenkit import data, eval, gcs_utils, parse_args, utils
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.models import lora, param, sharding
 from tokenkit.models.hypernet import Hypernet
@@ -35,6 +35,86 @@ from tokenkit.training import checkpoint, collators, losses, lr, opt, multitask
 from tokenkit.utils import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BaselineArgs:
+    divergence: str = "srkl"
+    dskd_use_causal_attention_mask: bool = False
+    adaptive_kl_alpha: float = 0.5
+    skew_lambda: float = 0.1
+    teacher_temperature: float = 1.0
+    kd_rate: float = 0.5
+    kd_temp: float = 2.0
+
+
+@dataclass
+class CrossTokenizerDistillArgs:
+    losses: list[str]
+    steps: int
+    warmup_steps: int
+    name: str
+    output: str
+    num_workers: int
+    log_interval: int
+    sync_interval: int
+    eval_interval: int
+    save_interval: int
+    target_tokenizer_name: str
+    data: parse_args.DataArgs
+    hypernet: parse_args.HypernetArgs
+    optimizer: parse_args.OptimizerArgs
+    eval: parse_args.EvalArgs
+    student: parse_args.ModelArgs
+    teacher: parse_args.ModelArgs | None = None
+    baseline: BaselineArgs = field(default_factory=BaselineArgs)
+    dtype: str = "bfloat16"
+    debug: bool = False
+    seed: int = 1234
+    max_teacher_length: int = 512
+    max_student_length: int = 512
+    pad_to_multiple_of: int = 64
+    eval_at_step_zero: bool = False
+    save_at_step_zero: bool = False
+    skip_lm_eval: bool = False
+    output_embeddings_mode: str = "preserve"
+    use_chat_template: bool = True
+    chat_template_mode: str = "direct_encode"
+    loss_mask_mode: str | None = None
+    gradient_checkpointing: bool = False
+    do_cost_analysis: bool = False
+    dry_run: bool = False
+    n_data_parallel: int = 1
+    n_model_parallel: int = 8
+    loss_weights: list[float] | None = None
+    loss_weight_mode: str | None = None
+    uncertainty_s_init: float = 0
+    loss_schedules: list[str] | None = None
+    ema_alpha: float = 0.95
+    multitask_aggregation_fn: str | None = None
+    bce_temp: float = 100.0
+    distill_chunk_sizes: list[int] = field(default_factory=lambda: [1])
+    alm_diff_fn: str = "binary_ce"
+    distill_main_path_numerator: str = "chunk_count"
+    distill_main_path_denominator: str = "chunk_count"
+    train_model_mode: str = "lora"
+    model_lora_rank: int = 64
+    model_lora_alpha: int = 64
+    train_embeddings: bool = True
+    tokens_to_add: list[str] | None = None
+    latents_to_align: str = "last_hidden_state"
+    latents_normalization: str = "l2_channelwise"
+    latents_chunks: str = "naive"
+    latents_do_project: bool = False
+    side_path_mapping_mode: str | None = None
+    side_path_distance_fn: str = "kl"
+    alm_mode: str = "append_space"
+    tokenizer_pair_data_path: str | None = None
+    tokenizer_pair_bias_threshold: float = 1e-4
+    tokenizer_pair_bias_threshold_side_path: str | None = None
+    add_expanded_input_ids: bool = False
+    export_to_gcs_bucket: str | None = None
+    ppl_eval_data: parse_args.DataArgs | None = None
 
 
 class TrainState(train_state.TrainState):
@@ -310,11 +390,8 @@ def pad_embeddings_with_random(embeddings, tokenizer, seed=1234):
     )
 
 
-@hydra.main(
-    version_base=None, config_path="../configs", config_name="cross_tokenizer_distill"
-)
-def my_app(args: DictConfig) -> None:
-    logger.info(pformat(OmegaConf.to_object(args)))
+def main(args: CrossTokenizerDistillArgs):
+    logger.info(pformat(args))
 
     if args.debug:
         jax.config.update("jax_default_device", jax.devices("cpu")[0])
@@ -327,14 +404,15 @@ def my_app(args: DictConfig) -> None:
     shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    OmegaConf.save(config=args, f=output_dir / "args.yaml", resolve=True)
+    with open(output_dir / "args.yaml", "w") as f:
+        yaml.dump(asdict(args), f)
 
-    if hasattr(args, "teacher"):
-        teacher_config = AutoConfig.from_pretrained(**args.teacher)
+    if args.teacher is not None:
+        teacher_config = AutoConfig.from_pretrained(**asdict(args.teacher))
     else:
-        teacher_config = AutoConfig.from_pretrained(**args.student)
+        teacher_config = AutoConfig.from_pretrained(**asdict(args.student))
 
-    student_config = AutoConfig.from_pretrained(**args.student)
+    student_config = AutoConfig.from_pretrained(**asdict(args.student))
 
     teacher_config.max_length = args.max_teacher_length
     if not args.debug and args.max_teacher_length % 128 == 0:
@@ -359,12 +437,15 @@ def my_app(args: DictConfig) -> None:
     dtype = getattr(jnp, args.dtype)
 
     # prepare dataset
-    dataset = data.get_dataset(**args.data, seed=args.seed)
-    ppl_eval_data = data.get_dataset(**args.ppl_eval_data, seed=args.seed)
+    dataset = data.get_dataset(**asdict(args.data), seed=args.seed)
+    if args.ppl_eval_data is not None:
+        ppl_eval_data = data.get_dataset(**asdict(args.ppl_eval_data), seed=args.seed)
+    else:
+        ppl_eval_data = None
 
-    student_model_kwargs = dict(args.student)
+    student_model_kwargs = asdict(args.student)
     teacher_model_kwargs = (
-        dict(args.teacher) if hasattr(args, "teacher") else dict(args.student)
+        asdict(args.teacher) if args.teacher is not None else asdict(args.student)
     )
     original_student_tokenizer_name = student_model_kwargs.pop("tokenizer_name")
     teacher_tokenizer_name = teacher_model_kwargs.pop("tokenizer_name")
@@ -465,7 +546,7 @@ def my_app(args: DictConfig) -> None:
             embeddings, tokenizer_student_original, seed=args.seed
         )
 
-    if args.target_tokenizer == "keep":
+    if target_tokenizer_name == original_student_tokenizer_name:
         new_embeddings = embeddings
         if len(new_embeddings) < len(target_tokenizer):
             logger.warning(
@@ -504,10 +585,10 @@ def my_app(args: DictConfig) -> None:
         num_embeddings=1 if student_config.tie_word_embeddings else 2,
         max_seq_length=1,
         vocab_size=len(target_tokenizer),  # TODO: implement vocab padding
-        **args.hypernet,
+        **asdict(args.hypernet),
     )
 
-    optimizer_kwargs = OmegaConf.to_object(args.optimizer)
+    optimizer_kwargs = asdict(args.optimizer)
     learning_rate_fn = lr.linear_warmup_linear_decay_with_linear_prefix(
         optimizer_kwargs.pop("learning_rate"),
         args.steps,
@@ -575,7 +656,6 @@ def my_app(args: DictConfig) -> None:
         target_tokenizer,
         max_teacher_length=args.max_teacher_length,
         max_student_length=args.max_student_length,
-        special_tokens_mode=args.special_tokens_mode,
         with_expanded_input_ids=args.add_expanded_input_ids,
         use_chat_template=args.use_chat_template,
         chat_template_mode=args.chat_template_mode,
@@ -591,15 +671,18 @@ def my_app(args: DictConfig) -> None:
         num_workers=args.num_workers,
         collate_fn=collator,
     )
-    ppl_eval_dataloader = torch.utils.data.DataLoader(
-        ppl_eval_data.get_torch_dataset(),
-        batch_size=1,
-        num_workers=args.num_workers,
-        collate_fn=collator,
-    )
+    if ppl_eval_data is not None:
+        ppl_eval_dataloader = torch.utils.data.DataLoader(
+            ppl_eval_data.get_torch_dataset(),
+            batch_size=1,
+            num_workers=args.num_workers,
+            collate_fn=collator,
+        )
+    else:
+        ppl_eval_dataloader = None
 
     if jax.process_index() == 0:
-        wandb.init(project="tokenkit", name=args.name, config=OmegaConf.to_object(args))
+        wandb.init(project="tokenkit", name=args.name, config=asdict(args))
         wandb.run.log_code()
 
     def predict_embeddings(params):  # TODO: add indices for subsampling
@@ -1071,7 +1154,7 @@ def my_app(args: DictConfig) -> None:
     upload_executor = None
     upload_name = args.name + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
 
-    grad_acc_steps = args.optimizer.get("grad_acc_steps") or 1
+    grad_acc_steps = args.optimizer.grad_acc_steps if args.optimizer.grad_acc_steps is not None else 1
     assert args.data.batch_size % grad_acc_steps == 0
     local_batch_size = args.data.batch_size // grad_acc_steps
 
@@ -1136,10 +1219,11 @@ def my_app(args: DictConfig) -> None:
             step == 0 and args.eval_at_step_zero
         ):
             # TODO: probably extract into eval function doing everything here
-            logger.info("PPL Eval:")
-            ppl_metrics = eval_loop(ppl_eval_dataloader)
-            ppl_metrics = {f"eval_{k}": v for k, v in ppl_metrics.items()}
-            utils.log(ppl_metrics, step=step + 1)
+            if ppl_eval_dataloader is not None:
+                logger.info("PPL Eval:")
+                ppl_metrics = eval_loop(ppl_eval_dataloader)
+                ppl_metrics = {f"eval_{k}": v for k, v in ppl_metrics.items()}
+                utils.log(ppl_metrics, step=step + 1)
 
             if not args.skip_lm_eval:
                 original_vocab = tokenizer_student_original.get_vocab()
@@ -1226,7 +1310,7 @@ def my_app(args: DictConfig) -> None:
                     logit_mask=state.logit_mask_new == 0,
                     output=output_dir / f"step_{step + 1}" / "lm_eval",
                     jaxlm_kwargs={"score_fn": jaxlm_score_fn},
-                    **OmegaConf.to_object(args.eval),
+                    **asdict(args.eval),
                 )
                 state.params["model"] = jdematerialize_lora(
                     param.unassign_embeddings(post_eval_params_buffer, student_config),
@@ -1299,4 +1383,4 @@ if __name__ == "__main__":
         True  # careful about this, required for lm_eval
     )
 
-    my_app()
+    main(parse_args.parse_args(CrossTokenizerDistillArgs))

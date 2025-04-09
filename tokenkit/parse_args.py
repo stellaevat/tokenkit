@@ -92,7 +92,10 @@ def parse_args(cls):
     for override in meta_args.overrides:
         first_equals = override.find("=")
         key = override[:first_equals].split(".")
-        value = json.loads(override[first_equals + 1 :])
+        try:
+            value = json.loads(override[first_equals + 1 :])
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSON: {override[first_equals + 1 :]}")
 
         current = args
         for k in key[:-1]:

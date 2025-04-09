@@ -474,6 +474,12 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             1,  # NB: cant merge global chunks :(
         )
 
+        teacher_chunk_sums_after_merge = aligned_count.sum(-2)
+        teacher_avg_chunk_lengths_after_merge = (
+            teacher_chunk_sums_after_merge.mean() / (teacher_chunk_sums_after_merge > 0).mean()
+        )
+
+        loss_args.scalar_report["teacher_avg_chunk_lengths_after_merge"] = teacher_avg_chunk_lengths_after_merge
         loss_args.scalar_report["t_min_aligned_space_logp"] = (
             t_aligned_space_logp * (aligned_count > 0)
         ).min()

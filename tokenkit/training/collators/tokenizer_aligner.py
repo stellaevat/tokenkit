@@ -17,6 +17,7 @@ class TokenizerAlignerCollator:
         max_student_length,
         use_chat_template=False,
         chat_template_mode="direct_encode",
+        expand_input_ids_dict=None,
         loss_mask_mode=None,
         tokenizer_pair_data_path=None,
         tokenizer_pair_bias_threshold=0.0,
@@ -29,6 +30,7 @@ class TokenizerAlignerCollator:
         self.max_student_length = max_student_length
         self.use_chat_template = use_chat_template
         self.chat_template_mode = chat_template_mode
+        self.expand_input_ids_dict = expand_input_ids_dict
 
         if loss_mask_mode is None:
             loss_mask_string = None
@@ -271,6 +273,12 @@ class TokenizerAlignerCollator:
             "loss_mask_new": loss_mask_new,
         }
 
+        if self.expand_input_ids_dict is not None:
+            batch["input_ids_original_expanded"] = utils.np_expand_input_ids(
+                input_ids_original,
+                self.expand_input_ids_dict,
+            )
+
         return batch
 
     def get_batch_pspecs(self):
@@ -290,5 +298,8 @@ class TokenizerAlignerCollator:
             "loss_mask_original": P("data", None),
             "loss_mask_new": P("data", None),
         }
+
+        if self.expand_input_ids_dict is not None:
+            batch_specs["input_ids_original_expanded"] = P("data", None)
 
         return batch_specs

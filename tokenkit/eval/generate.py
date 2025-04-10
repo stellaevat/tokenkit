@@ -68,13 +68,14 @@ class Generator:
         self,
         model_fn,
         input_ids,
+        expanded_input_ids,
         attention_mask,
         params,
         init_cache,
     ):
         position_ids = (jnp.cumsum(attention_mask, axis=1) - 1) * attention_mask
 
-        inputs_embeds = self.compute_inputs_embeds(input_ids)
+        inputs_embeds = self.compute_inputs_embeds(input_ids, expanded_input_ids)
 
         out = model_fn(
             input_ids=None,
@@ -127,10 +128,12 @@ class Generator:
 
         self.expand_input_ids = expand_input_ids
         if expand_input_ids:
-            self.expand_input_ids_matrix = utils.jax_get_expand_input_ids_matrix(
+            self.expand_input_ids_matrix = utils.get_expand_input_ids_matrix(
                 tokenizer, expand_input_ids_vocab
             )
-            self.expand_input_ids_vocab = expand_input_ids_vocab
+            self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
+                tokenizer, expand_input_ids_vocab
+            )
             self.expand_input_ids_embeddings = expand_input_ids_embeddings
 
         self.until_tokens = []
@@ -309,7 +312,7 @@ class Generator:
         )
 
     def compute_inputs_embeds(
-        self, input_ids, last_only=False
+        self, input_ids, expanded_input_ids=None, last_only=False
     ):
         embedding_matrix = param.get(
             self.params,
@@ -322,11 +325,13 @@ class Generator:
             inputs_embeds = jnp.take(embedding_matrix, input_ids, axis=0)
 
         if self.expand_input_ids:
-            expanded_input_ids = utils.jax_expand_input_ids(
-                input_ids,
-                self.expand_input_ids_matrix,
-                last_only=last_only,
-            )
+            if expanded_input_ids is None:
+                expanded_input_ids = utils.jax_expand_input_ids(
+                    input_ids,
+                    self.expand_input_ids_matrix,
+                    last_only=last_only,
+                )
+
             expanded_inputs_embeds = jnp.take(
                 self.expand_input_ids_embeddings, expanded_input_ids, axis=0
             )
@@ -494,20 +499,23 @@ class Generator:
                 compile_args = (
                     jnp.zeros((self.batch_size, length), dtype=jnp.int32),
                     jnp.zeros((self.batch_size, length), dtype=jnp.int32),
+                    jnp.zeros((self.batch_size, length), dtype=jnp.int32),
                     self.params,
                     self.get_cache(length),
                 )
                 compiled_prefill_fns[length] = (
                     jax.jit(
-                        lambda input_ids, attention_mask, params, init_cache: self.prefill(
+                        lambda input_ids, expanded_input_ids, attention_mask, params, init_cache: self.prefill(
                             self.prefill_fn,
                             input_ids,
+                            expanded_input_ids,
                             attention_mask,
                             params,
                             init_cache,
                         ),
                         donate_argnums=(3,),
                         in_shardings=(
+                            NamedSharding(self.mesh, P()),
                             NamedSharding(self.mesh, P()),
                             NamedSharding(self.mesh, P()),
                             self.param_shardings,
@@ -520,9 +528,10 @@ class Generator:
                 )
         else:
             compiled_prefill_fns = {
-                length: lambda input_ids, attention_mask, params, init_cache: self.prefill(
+                length: lambda input_ids, expanded_input_ids, attention_mask, params, init_cache: self.prefill(
                     self.prefill_fn,
                     input_ids,
+                    expanded_input_ids,
                     attention_mask,
                     params,
                     init_cache,
@@ -637,8 +646,17 @@ class Generator:
             if padded_prefill_length - max_new_tokens == 0:
                 cache = init_cache
             else:
+                if self.expand_input_ids:
+                    prefill_expanded_input_ids = utils.np_expand_input_ids(
+                        prefill_input_ids,
+                        self.expand_input_ids_dict,
+                    )
+                else:
+                    prefill_expanded_input_ids = np.zeros_like(prefill_input_ids)
+
                 cache = compiled_prefill_fns[padded_prefill_length](
                     prefill_input_ids,
+                    prefill_expanded_input_ids,
                     attention_mask,
                     self.params,
                     init_cache,

@@ -112,7 +112,7 @@ class CrossTokenizerDistillArgs:
     tokenizer_pair_data_path: str | None = None
     tokenizer_pair_bias_threshold: float = 1e-4
     tokenizer_pair_bias_threshold_side_path: str | None = None
-    add_expanded_input_ids: bool = False
+    expand_input_ids: bool = False
     export_to_gcs_bucket: str | None = None
     ppl_eval_data: parse_args.DataArgs | None = None
 
@@ -197,7 +197,7 @@ def get_state(
         ),
     }
 
-    if args.add_expanded_input_ids:
+    if args.expand_input_ids:
         n_pad_original = utils.get_n_pad(
             original_embeddings.shape[0], args.pad_to_multiple_of
         )
@@ -651,6 +651,14 @@ def main(args: CrossTokenizerDistillArgs):
     utils.param_report(state.params, state.train_mask)
     train_mask = jax.device_get(state.train_mask)
 
+    if args.expand_input_ids:
+        expand_input_ids_dict = utils.get_expand_input_ids_dict(
+            target_tokenizer,
+            tokenizer_student_original.get_vocab(),
+        )
+    else:
+        expand_input_ids_dict = None
+
     collator = collators.TokenizerAlignerCollator(
         tokenizer_teacher,
         target_tokenizer,
@@ -658,6 +666,7 @@ def main(args: CrossTokenizerDistillArgs):
         max_student_length=args.max_student_length,
         use_chat_template=args.use_chat_template,
         chat_template_mode=args.chat_template_mode,
+        expand_input_ids_dict=expand_input_ids_dict,
         loss_mask_mode=args.loss_mask_mode,
         tokenizer_pair_data_path=args.tokenizer_pair_data_path,
         tokenizer_pair_bias_threshold=args.tokenizer_pair_bias_threshold,
@@ -684,14 +693,6 @@ def main(args: CrossTokenizerDistillArgs):
         wandb.init(project="tokenkit", name=args.name, config=asdict(args))
         wandb.run.log_code()
 
-    if args.add_expanded_input_ids:
-        expand_input_ids_matrix = utils.jax_get_expand_input_ids_matrix(
-            target_tokenizer,
-            tokenizer_student_original.get_vocab(),
-        )
-    else:
-        expand_input_ids_matrix = None
-
     def predict_embeddings(params):  # TODO: add indices for subsampling
         embeddings = params["new_embeddings"]
         embeddings = jax.lax.with_sharding_constraint(
@@ -709,18 +710,13 @@ def main(args: CrossTokenizerDistillArgs):
             predicted_embeddings, NamedSharding(mesh, P("model", None, "data"))
         )
 
-    def compute_inputs_embeds(model_params, input_ids):
+    def compute_inputs_embeds(model_params, input_ids, expanded_input_ids):
         input_embeddings = param.get(
             model_params, param.get_input_embedding_path(student_config.model_type)
         )
 
         # NOTE: this assumes Llama/Gemma-style where position embeddings are part of attention mechanism
-        if args.add_expanded_input_ids:
-            expanded_input_ids = utils.jax_expand_input_ids(
-                input_ids,
-                expand_input_ids_matrix,
-            )
-
+        if args.expand_input_ids:
             standard_inputs_embeds = jnp.take(
                 input_embeddings,
                 input_ids,
@@ -1238,8 +1234,6 @@ def main(args: CrossTokenizerDistillArgs):
                 utils.log(ppl_metrics, step=step + 1)
 
             if not args.skip_lm_eval:
-                original_vocab = tokenizer_student_original.get_vocab()
-
                 predicted_embeddings = jpredict_embeddings(state.params)
                 model_params_with_embeddings = param.assign_embeddings(
                     jmaterialize_lora(
@@ -1264,6 +1258,7 @@ def main(args: CrossTokenizerDistillArgs):
                         None,
                         None,
                         None,
+                        None,
                     ),
                     out_shardings=(None, None),
                 )
@@ -1271,6 +1266,7 @@ def main(args: CrossTokenizerDistillArgs):
                     model_fn,
                     params,
                     input_ids,
+                    expanded_input_ids,
                     labels,
                     suffix_mask,
                     space_mask,
@@ -1280,6 +1276,7 @@ def main(args: CrossTokenizerDistillArgs):
                     inputs_embeds = compute_inputs_embeds(
                         params,
                         input_ids,
+                        expanded_input_ids,
                     )
                     return eval.score(
                         model_fn,
@@ -1294,11 +1291,19 @@ def main(args: CrossTokenizerDistillArgs):
 
                 def jaxlm_score_fn(model_fn, params, model_args, *pargs):
                     (input_ids,) = model_args
+                    if args.expand_input_ids:
+                        expanded_input_ids = utils.np_expand_input_ids(
+                            input_ids,
+                            expand_input_ids_dict,
+                        )
+                    else:
+                        expanded_input_ids = None
 
                     return jaxlm_inner_score_fn(
                         model_fn,
                         params,
                         input_ids,
+                        expanded_input_ids,
                         *pargs,
                     )
 

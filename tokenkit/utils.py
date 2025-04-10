@@ -70,7 +70,7 @@ def get_space_mask(tokenizer):
     return space_mask
 
 
-def jax_get_expand_input_ids_matrix(
+def get_expand_input_ids_matrix(
     tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
 ):
     expansion_data = []
@@ -95,9 +95,52 @@ def jax_get_expand_input_ids_matrix(
     expansion_indices.insert(0, [0] * max_length)
 
     return (
-        jnp.array(expansion_data, dtype=np.int32),
-        jnp.array(expansion_indices, dtype=np.int32),
+        np.array(expansion_data, dtype=np.int32),
+        np.array(expansion_indices, dtype=np.int32),
     )
+
+def get_expand_input_ids_dict(
+    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
+):
+    expansion_data, expansion_indices = get_expand_input_ids_matrix(tokenizer, expand_input_ids_vocab, max_length)
+
+    return ({
+        tuple(i for i in indices if i != 0): data for indices, data in zip(expansion_indices, expansion_data)
+    }, set(tokenizer.all_special_ids))
+
+def np_expand_input_ids(
+    input_ids,
+    expand_input_ids_dict,
+    last_only=False,
+    maxlen=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
+):
+    expanded_input_ids = np.zeros_like(input_ids)
+
+    for example_idx in range(len(input_ids)):
+        last_maxlen_ids = []
+
+        for i in range(len(input_ids[example_idx])):
+            last_maxlen_ids.insert(0, input_ids[example_idx][i] + 1)
+            if len(last_maxlen_ids) > maxlen:
+                last_maxlen_ids.pop()
+
+            if last_only and i < len(input_ids[example_idx]) - 1:
+                continue
+
+            if last_maxlen_ids[0] in expand_input_ids_dict[1]:
+                expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][tuple(last_maxlen_ids)] - 1
+            else:
+                found = False
+                last_maxlen_up_to = len(last_maxlen_ids)
+
+                while not found and last_maxlen_up_to > 0:
+                    try:
+                        expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][tuple(last_maxlen_ids[:last_maxlen_up_to])] - 1
+                        found = True
+                    except KeyError:
+                        last_maxlen_up_to -= 1
+
+    return expanded_input_ids
 
 
 def jax_expand_input_ids(
@@ -623,3 +666,16 @@ def test_encode_prompt(tokenizer_name):
 
     # apply_chat_template may inject an (undesired) system prompt, so the best we can do is to check the suffix (and skip first token since it may be bos)
     assert " ".join(comparison_tokens).endswith(" ".join(tokens[1:]))
+
+
+def test_expand_input_ids():
+    tokenizer = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2")
+    byte_tokenizer = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2:conversion=byte")
+
+    expand_vocab = tokenizer.get_vocab()
+
+    byte_input_ids = np.array([byte_tokenizer.encode("Hello, world! How are you today?")])
+    expanded_input_ids_np = np_expand_input_ids(byte_input_ids, get_expand_input_ids_dict(byte_tokenizer, expand_vocab))
+    expanded_input_ids_jax = jax_expand_input_ids(byte_input_ids, get_expand_input_ids_matrix(byte_tokenizer, expand_vocab))
+
+    assert np.all(expanded_input_ids_np == expanded_input_ids_jax)

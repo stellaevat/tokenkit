@@ -185,20 +185,15 @@ def my_app(args: DictConfig) -> None:
     jaxlm_kwargs = {"precompile": not args.use_cpu}
 
     if args.expand_input_ids:
-        expand_input_ids_matrix = utils.jax_get_expand_input_ids_matrix(
+        # TODO: move elsewhere, probably into jaxlm
+        expand_input_ids_dict = utils.get_expand_input_ids_dict(
             tokenizer,
             expand_vocab,
         )
 
-        # TODO: move elsewhere, probably into jaxlm
-        def compute_inputs_embeds(model_params, input_ids):
+        def compute_inputs_embeds(model_params, input_ids, expanded_input_ids):
             input_embeddings = param.get(
                 model_params, param.get_input_embedding_path(config.model_type)
-            )
-
-            expanded_input_ids = utils.jax_expand_input_ids(
-                input_ids,
-                expand_input_ids_matrix,
             )
 
             standard_inputs_embeds = jnp.take(
@@ -226,6 +221,7 @@ def my_app(args: DictConfig) -> None:
                 NamedSharding(mesh, P()),
                 NamedSharding(mesh, P()),
                 NamedSharding(mesh, P()),
+                NamedSharding(mesh, P()),
             ),
             out_shardings=(NamedSharding(mesh, P()), NamedSharding(mesh, P())),
         )
@@ -233,6 +229,7 @@ def my_app(args: DictConfig) -> None:
             model_fn,
             params,
             input_ids,
+            expanded_input_ids,
             labels,
             suffix_mask,
             space_mask,
@@ -242,6 +239,7 @@ def my_app(args: DictConfig) -> None:
             inputs_embeds = compute_inputs_embeds(
                 params,
                 input_ids,
+                expanded_input_ids,
             )
             return score(
                 model_fn,
@@ -257,10 +255,16 @@ def my_app(args: DictConfig) -> None:
         def jaxlm_score_fn(model_fn, params, model_args, *pargs):
             (input_ids,) = model_args
 
+            expanded_input_ids = utils.np_expand_input_ids(
+                input_ids,
+                expand_input_ids_dict,
+            )
+
             return jaxlm_inner_score_fn(
                 model_fn,
                 params,
                 input_ids,
+                expanded_input_ids,
                 *pargs,
             )
 

@@ -141,7 +141,7 @@ def get_alignment_indices(
     if check:
         to_remove = []
         for alignment_idx, (start_i, end_i, start_j, end_j) in enumerate(alignment_indices):
-            if "".join(normalized_tokens_teacher[start_i:end_i]) == "".join(
+            if "".join(normalized_tokens_teacher[start_i:end_i]) != "".join(
                 normalized_tokens_student[start_j:end_j]
             ):
                 logger.warning(f"Alignment mismatch: {normalized_tokens_teacher[start_i:end_i]} != {normalized_tokens_student[start_j:end_j]}")

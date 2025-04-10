@@ -83,7 +83,7 @@ def jax_get_expand_input_ids_matrix(
             indices = [vocab[key] + 1]
         else:
             indices = [
-                x.id + 1 for x in tokenizer.backend_tokenizer.model.tokenize(key)
+                x.id + 1 for x in tokenizer.backend_tokenize(key)
             ][::-1][:max_length]
         while len(indices) < max_length:
             indices.append(0)

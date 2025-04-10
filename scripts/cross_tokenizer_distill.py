@@ -1264,7 +1264,6 @@ def main(args: CrossTokenizerDistillArgs):
                         None,
                         None,
                         None,
-                        None,
                     ),
                     out_shardings=(None, None),
                 )

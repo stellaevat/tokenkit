@@ -226,7 +226,6 @@ def my_app(args: DictConfig) -> None:
                 NamedSharding(mesh, P()),
                 NamedSharding(mesh, P()),
                 NamedSharding(mesh, P()),
-                NamedSharding(mesh, P()),
             ),
             out_shardings=(NamedSharding(mesh, P()), NamedSharding(mesh, P())),
         )

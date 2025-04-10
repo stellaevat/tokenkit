@@ -798,6 +798,7 @@ def main(args: CrossTokenizerDistillArgs):
             inputs_embeds_new = compute_inputs_embeds(
                 model_params_with_predicted_embeddings,
                 batch["input_ids_new"],
+                batch.get("expanded_input_ids_new"),
             )
 
             student_out = new_model_fn(

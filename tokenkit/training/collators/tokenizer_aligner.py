@@ -274,8 +274,8 @@ class TokenizerAlignerCollator:
         }
 
         if self.expand_input_ids_dict is not None:
-            batch["input_ids_original_expanded"] = utils.np_expand_input_ids(
-                input_ids_original,
+            batch["expanded_input_ids_new"] = utils.np_expand_input_ids(
+                input_ids_new,
                 self.expand_input_ids_dict,
             )
 
@@ -300,6 +300,6 @@ class TokenizerAlignerCollator:
         }
 
         if self.expand_input_ids_dict is not None:
-            batch_specs["input_ids_original_expanded"] = P("data", None)
+            batch_specs["expanded_input_ids_new"] = P("data", None)
 
         return batch_specs

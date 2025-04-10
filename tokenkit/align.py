@@ -140,7 +140,7 @@ def get_alignment_indices(
         for start_i, end_i, start_j, end_j in alignment_indices:
             assert "".join(normalized_tokens_teacher[start_i:end_i]) == "".join(
                 normalized_tokens_student[start_j:end_j]
-            )
+            ), f"Alignment mismatch: {normalized_tokens_teacher[start_i:end_i]} != {normalized_tokens_student[start_j:end_j]}"
 
     return (
         alignment_indices,

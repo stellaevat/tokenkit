@@ -16,7 +16,7 @@ from tqdm.auto import tqdm as raw_tqdm
 from transformers import AutoTokenizer
 
 import wandb
-from tokenkit import constants
+from tokenkit import constants, model_kinds
 from tokenkit.byteify import ByteifyTokenizer, load_byteify_tokenizer
 
 tqdm = partial(raw_tqdm, dynamic_ncols=True, disable=jax.process_index() != 0)
@@ -70,50 +70,80 @@ def get_space_mask(tokenizer):
     return space_mask
 
 
-def expand_input_ids(
-    input_ids_new,
-    tokenizer,
-    original_vocab,
-    use_heuristic=False,
+def jax_get_expand_input_ids_matrix(
+    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
+):
+    expansion_data = []
+    expansion_indices = []
+
+    vocab = tokenizer.get_vocab()
+
+    for key, value in expand_input_ids_vocab.items():
+        if key in vocab:
+            indices = [vocab[key] + 1]
+        else:
+            indices = [
+                x.id + 1 for x in tokenizer.backend_tokenizer.model.tokenize(key)
+            ][::-1][:max_length]
+        while len(indices) < max_length:
+            indices.append(0)
+
+        expansion_data.append(1 + value)
+        expansion_indices.append(indices)
+
+    expansion_data.insert(0, -1)
+    expansion_indices.insert(0, [0] * max_length)
+
+    return (
+        jnp.array(expansion_data, dtype=np.int32),
+        jnp.array(expansion_indices, dtype=np.int32),
+    )
+
+
+def jax_expand_input_ids(
+    input_ids,
+    expand_input_ids_matrix,
+    last_only=False,
     maxlen=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
 ):
-    expanded_input_ids = np.zeros_like(input_ids_new)
+    @partial(jax.jit, static_argnums=(1,))
+    @partial(jax.vmap, in_axes=(0, None))
+    def moving_window(a, size: int):
+        padded_a = jnp.pad(a, ((0, size - 1),), mode="constant", constant_values=0)
+        starts = jnp.arange(len(a))
+        return jax.vmap(
+            lambda start: jax.lax.dynamic_slice(padded_a, (start,), (size,))
+        )(starts)
 
-    for example_index in range(len(input_ids_new)):
-        tokens_new = tokenizer.convert_ids_to_tokens(input_ids_new[example_index])
+    input_ids_window = moving_window(input_ids[:, ::-1], maxlen) + 1
+    input_ids_window_repeated = jnp.tril(
+        jnp.tile(
+            input_ids_window[:, :, None],
+            (1, 1, maxlen, 1),
+        )
+    )[:, ::-1, ::-1, :]
 
-        if use_heuristic:
-            # use a heuristic for pretokenization with 100% recall to narrow down possible candidates
-            starts_with_space = [
-                token_id == tokenizer.pad_token_id or (len(token) > 0 and token[0] == "Ġ")
-                for token_id, token in zip(input_ids_new[example_index], tokens_new)
-            ]
-        else:
-            starts_with_space = None
+    if last_only:
+        input_ids_window_repeated = input_ids_window_repeated[:, -1:, :, :]
 
-        for token_idx in range(len(tokens_new)):
-            expanded_token_id = None
+    def inner_fn(lookup_tokens):
+        return (
+            (expand_input_ids_matrix[1] == lookup_tokens[None, :]).all(axis=-1).argmax()
+        )
 
-            if use_heuristic:
-                prefix_start = token_idx
-
-                while (
-                    prefix_start > 0
-                    and (maxlen is None or token_idx + 1 - prefix_start < maxlen)
-                    and not starts_with_space[prefix_start]
-                ):
-                    prefix_start -= 1
-            else:
-                prefix_start = 0
-
-            for prefix_idx in range(prefix_start, token_idx + 1):
-                expanded_token_id = original_vocab.get(
-                    "".join(tokens_new[prefix_idx : token_idx + 1])
-                )
-                if expanded_token_id is not None:
-                    break
-
-            expanded_input_ids[example_index, token_idx] = expanded_token_id
+    expanded_indices = jax.vmap(inner_fn)(
+        input_ids_window_repeated.reshape(-1, maxlen)
+    ).reshape(input_ids_window_repeated.shape[:-1])
+    expanded_input_ids = (
+        expand_input_ids_matrix[0][
+            jnp.take_along_axis(
+                expanded_indices,
+                (expanded_indices > 0).argmax(-1, keepdims=True),
+                axis=-1,
+            )[:, :, 0]
+        ]
+        - 1
+    )
 
     return expanded_input_ids
 
@@ -134,6 +164,7 @@ def fvt(
     diff_embeddings = []
 
     stats = {
+        "special_token_exact_match": 0,
         "exact_match": 0,
         "averaged": 0,
         "fallback": 0,
@@ -142,12 +173,26 @@ def fvt(
     source_mean = source_embeddings.mean(0)
     source_std = source_embeddings.std(0)
 
+    one_to_one_special_tokens_map = {}
+    for k in model_kinds.BaseModelKind.SPECIAL_KEYS:
+        v1 = source_tokenizer.model_kind_cls.replacements[k]
+        v2 = target_tokenizer.model_kind_cls.replacements[k]
+
+        if v1 is not None and v2 is not None:
+            one_to_one_special_tokens_map[v2[0]] = v1[0]
+            logger.info(f"Copying special token {v1[0]} -> {v2[0]}")
+        elif v2 is not None:
+            logger.warning(f"Special token {k} has no replacements in source tokenizer: {v1}. Not copying special token embedding.")
+
     for i in tqdm(
         range(len(target_tokenizer)), desc="Applying FVT..", disable=not verbose
     ):
         token = target_tokenizer.convert_ids_to_tokens(i)
 
-        if (
+        if token in one_to_one_special_tokens_map:
+            stats["special_token_exact_match"] += 1
+            original_to_new_indices[i] = source_vocab[one_to_one_special_tokens_map[token]]
+        elif (
             token in source_vocab
             and source_vocab[token] < len(source_embeddings)
             and allow_exact_match
@@ -196,6 +241,7 @@ def fvt(
     logger.info(f"FVT exact match: {stats['exact_match']}")
     logger.info(f"FVT averaged: {stats['averaged']}")
     logger.info(f"FVT fallback: {stats['fallback']}")
+    logger.info(f"FVT special token exact match: {stats['special_token_exact_match']}")
 
     diff_indices = np.array(diff_indices, dtype=int)
     diff_embeddings = np.array(diff_embeddings, dtype=np.float32)

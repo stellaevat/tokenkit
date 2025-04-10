@@ -656,7 +656,6 @@ def main(args: CrossTokenizerDistillArgs):
         target_tokenizer,
         max_teacher_length=args.max_teacher_length,
         max_student_length=args.max_student_length,
-        with_expanded_input_ids=args.add_expanded_input_ids,
         use_chat_template=args.use_chat_template,
         chat_template_mode=args.chat_template_mode,
         loss_mask_mode=args.loss_mask_mode,
@@ -685,6 +684,14 @@ def main(args: CrossTokenizerDistillArgs):
         wandb.init(project="tokenkit", name=args.name, config=asdict(args))
         wandb.run.log_code()
 
+    if args.expand_input_ids:
+        expand_input_ids_matrix = utils.jax_get_expand_input_ids_matrix(
+            target_tokenizer,
+            tokenizer_student_original.get_vocab(),
+        )
+    else:
+        expand_input_ids_matrix = None
+
     def predict_embeddings(params):  # TODO: add indices for subsampling
         embeddings = params["new_embeddings"]
         embeddings = jax.lax.with_sharding_constraint(
@@ -702,13 +709,18 @@ def main(args: CrossTokenizerDistillArgs):
             predicted_embeddings, NamedSharding(mesh, P("model", None, "data"))
         )
 
-    def compute_inputs_embeds(model_params, input_ids, expanded_input_ids):
+    def compute_inputs_embeds(model_params, input_ids):
         input_embeddings = param.get(
             model_params, param.get_input_embedding_path(student_config.model_type)
         )
 
         # NOTE: this assumes Llama/Gemma-style where position embeddings are part of attention mechanism
         if args.add_expanded_input_ids:
+            expanded_input_ids = utils.jax_expand_input_ids(
+                input_ids,
+                expand_input_ids_matrix,
+            )
+
             standard_inputs_embeds = jnp.take(
                 input_embeddings,
                 input_ids,
@@ -790,7 +802,6 @@ def main(args: CrossTokenizerDistillArgs):
             inputs_embeds_new = compute_inputs_embeds(
                 model_params_with_predicted_embeddings,
                 batch["input_ids_new"],
-                batch.get("expanded_input_ids_new"),
             )
 
             student_out = new_model_fn(
@@ -1058,7 +1069,6 @@ def main(args: CrossTokenizerDistillArgs):
         inputs_embeds_new = compute_inputs_embeds(
             model_params_with_embeddings,
             batch["input_ids_new"],
-            batch.get("expanded_input_ids_new"),
         )
 
         logits = new_model_fn(
@@ -1262,7 +1272,6 @@ def main(args: CrossTokenizerDistillArgs):
                     model_fn,
                     params,
                     input_ids,
-                    expanded_input_ids,
                     labels,
                     suffix_mask,
                     space_mask,
@@ -1272,7 +1281,6 @@ def main(args: CrossTokenizerDistillArgs):
                     inputs_embeds = compute_inputs_embeds(
                         params,
                         input_ids,
-                        expanded_input_ids,
                     )
                     return eval.score(
                         model_fn,
@@ -1287,20 +1295,11 @@ def main(args: CrossTokenizerDistillArgs):
 
                 def jaxlm_score_fn(model_fn, params, model_args, *pargs):
                     (input_ids,) = model_args
-                    if args.add_expanded_input_ids:
-                        expanded_input_ids = utils.expand_input_ids(
-                            input_ids,
-                            tokenizer=target_tokenizer,
-                            original_vocab=original_vocab,
-                            use_heuristic=True,
-                        )
-                    else:
-                        expanded_input_ids = None
+
                     return jaxlm_inner_score_fn(
                         model_fn,
                         params,
                         input_ids,
-                        expanded_input_ids,
                         *pargs,
                     )
 

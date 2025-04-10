@@ -15,7 +15,6 @@ class TokenizerAlignerCollator:
         tokenizer_new,
         max_teacher_length,
         max_student_length,
-        with_expanded_input_ids=False,
         use_chat_template=False,
         chat_template_mode="direct_encode",
         loss_mask_mode=None,
@@ -28,7 +27,6 @@ class TokenizerAlignerCollator:
         self.tokenizer_new = tokenizer_new
         self.max_teacher_length = max_teacher_length
         self.max_student_length = max_student_length
-        self.with_expanded_input_ids = with_expanded_input_ids
         self.use_chat_template = use_chat_template
         self.chat_template_mode = chat_template_mode
 
@@ -273,14 +271,6 @@ class TokenizerAlignerCollator:
             "loss_mask_new": loss_mask_new,
         }
 
-        if self.with_expanded_input_ids:
-            batch["expanded_input_ids_new"] = utils.expand_input_ids(
-                input_ids_new,
-                tokenizer=self.tokenizer_new,
-                original_vocab=self.tokenizer_original_vocab,
-                use_heuristic=True,
-            )
-
         return batch
 
     def get_batch_pspecs(self):
@@ -300,8 +290,5 @@ class TokenizerAlignerCollator:
             "loss_mask_original": P("data", None),
             "loss_mask_new": P("data", None),
         }
-
-        if self.with_expanded_input_ids:
-            batch_specs["expanded_input_ids_new"] = P("data", None)
 
         return batch_specs

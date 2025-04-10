@@ -34,9 +34,9 @@ class BaseModelKind(ABC):
         "<|<start_header>|>",
         "<|<end_header>|>",
         "<|<eot>|>",
+        "<|<system_name>|>",
         "<|<user_name>|>",
         "<|<assistant_name>|>",
-        "<|<system_name>|>",
     ]
 
     def __init__(self):
@@ -84,9 +84,9 @@ class Qwen2ModelKind(BaseModelKind):
             "<|<end_header>|>": ["Ċ"],
             "<|<eos>|>": ["<|endoftext|>"],
             "<|<eot>|>": ["<|im_end|>", "Ċ"],
+            "<|<system_name>|>": ["system"],
             "<|<user_name>|>": ["user"],
             "<|<assistant_name>|>": ["assistant"],
-            "<|<system_name>|>": ["system"],
         }
 
 
@@ -111,9 +111,9 @@ class Llama3ModelKind(BaseModelKind):
             # give eot precedence over eos - not ideal but should work for chat templates
             "<|<eos>|>": ["<|eot_id|>"],
             "<|<eot>|>": ["<|eot_id|>"],
+            "<|<system_name>|>": ["system"],
             "<|<user_name>|>": ["user"],
             "<|<assistant_name>|>": ["assistant"],
-            "<|<system_name>|>": ["system"],
         }
 
 
@@ -136,9 +136,9 @@ class Gemma2ModelKind(BaseModelKind):
             "<|<end_header>|>": ["Ċ"],
             "<|<eos>|>": ["<eos>"],
             "<|<eot>|>": ["<end_of_turn>", "Ċ"],
+            "<|<system_name>|>": ["user"],
             "<|<user_name>|>": ["user"],
             "<|<assistant_name>|>": ["model"],
-            "<|<system_name>|>": ["user"],
         }
 
 
@@ -156,6 +156,7 @@ class Phi3ModelKind(BaseModelKind):
             "<|<end_header>|>": ["Ċ"],
             "<|<eos>|>": ["<|endoftext|>"],
             "<|<eot>|>": ["<|end|>", "Ċ"],
+            "<|<system_name>|>": ["<|user|>"],
             "<|<user_name>|>": ["<|user|>"],
             "<|<assistant_name>|>": ["<|assistant|>"],
         }
@@ -175,6 +176,7 @@ class GPT2ModelKind(BaseModelKind):
             "<|<end_header>|>": None,
             "<|<eos>|>": ["<|endoftext|>"],
             "<|<eot>|>": ["<|endoftext|>"],
+            "<|<system_name>|>": None,
             "<|<user_name>|>": None,
             "<|<assistant_name>|>": None,
         }

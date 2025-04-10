@@ -684,7 +684,7 @@ def main(args: CrossTokenizerDistillArgs):
         wandb.init(project="tokenkit", name=args.name, config=asdict(args))
         wandb.run.log_code()
 
-    if args.expand_input_ids:
+    if args.add_expanded_input_ids:
         expand_input_ids_matrix = utils.jax_get_expand_input_ids_matrix(
             target_tokenizer,
             tokenizer_student_original.get_vocab(),

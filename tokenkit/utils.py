@@ -128,7 +128,7 @@ def np_expand_input_ids(
                 continue
 
             if last_maxlen_ids[0] in expand_input_ids_dict[1]:
-                expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][tuple(last_maxlen_ids[0],)] - 1
+                expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][(last_maxlen_ids[0],)] - 1
             else:
                 found = False
                 last_maxlen_up_to = len(last_maxlen_ids)

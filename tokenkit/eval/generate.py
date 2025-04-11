@@ -571,9 +571,7 @@ class Generator:
         all_running_tokens = []
 
         for prompt in tqdm(prompts, desc="Encoding prompts...", **(tqdm_kwargs or {})):
-            prompt_tokens = [
-                self.vocab[x] for x in utils.encode_prompt(prompt, self.tokenizer)[0]
-            ]
+            prompt_tokens = utils.encode_prompt(prompt, self.tokenizer)[0]
 
             all_prefill_tokens.append(prompt_tokens[:-1])
             all_running_tokens.append(prompt_tokens[-EXPAND_INPUT_IDS_MAX_LENGTH:])

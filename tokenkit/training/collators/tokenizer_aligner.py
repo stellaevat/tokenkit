@@ -134,12 +134,10 @@ class TokenizerAlignerCollator:
         attention_mask = np.zeros((len(texts), max_length), dtype=np.int32)
 
         for i in range(len(texts)):
-            current_input_ids = tokenizer.convert_tokens_to_ids(
-                utils.encode_prompt(
-                    utils.preprocess_prompt(texts[i], self.chat_template_mode),
-                    tokenizer,
-                    max_length=max_length,
-                )[0]
+            current_input_ids, _ = utils.encode_prompt(
+                utils.preprocess_prompt(texts[i], self.chat_template_mode),
+                tokenizer,
+                max_length=max_length,
             )
             input_ids[i, : len(current_input_ids)] = current_input_ids
             attention_mask[i, : len(current_input_ids)] = 1

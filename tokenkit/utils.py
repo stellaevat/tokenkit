@@ -448,9 +448,8 @@ def preprocess_prompt(prompt, chat_template_mode):
 
     return prompt
 
-
 def encode_prompt(prompt, tokenizer, max_length=None):
-    tokens = []
+    token_ids = []
     regular_token_indices = []
 
     if max_length is not None:
@@ -460,19 +459,17 @@ def encode_prompt(prompt, tokenizer, max_length=None):
 
     def process_chunk(chunk):
         if chunk in tokenizer.added_tokens_encoder:
-            tokens.append(tokenizer.model_kind_cls.byte_fallback_fn(chunk))
+            token_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.model_kind_cls.byte_fallback_fn(chunk)))
             regular_token_indices.append(-1)
         elif chunk in tokenizer.model_kind_cls.replacements:
             if tokenizer.model_kind_cls.replacements[chunk] is not None:
-                tokens.extend(tokenizer.model_kind_cls.replacements[chunk])
+                token_ids.extend(tokenizer.convert_tokens_to_ids(tokenizer.model_kind_cls.replacements[chunk]))
                 regular_token_indices.extend(
                     [-1] * len(tokenizer.model_kind_cls.replacements[chunk])
                 )
         else:
-            chunk_tokens = tokenizer.convert_ids_to_tokens(
-                tokenizer(chunk, add_special_tokens=False)["input_ids"]
-            )
-            tokens.extend(chunk_tokens)
+            chunk_token_ids = tokenizer(chunk, add_special_tokens=False)["input_ids"]
+            token_ids.extend(chunk_token_ids)
 
             try:
                 regular_token_start = next(
@@ -482,7 +479,7 @@ def encode_prompt(prompt, tokenizer, max_length=None):
                 regular_token_start = -1
 
             regular_token_indices.extend(
-                [regular_token_start + 1 + i for i in range(len(chunk_tokens))]
+                [regular_token_start + 1 + i for i in range(len(chunk_token_ids))]
             )
 
     start_i = 0
@@ -520,8 +517,8 @@ def encode_prompt(prompt, tokenizer, max_length=None):
             start_i = i + len(key)
             i = start_i
 
-            if max_length is not None and len(tokens) >= max_length:
-                return tokens[:max_length], regular_token_indices[:max_length]
+            if max_length is not None and len(token_ids) >= max_length:
+                return token_ids[:max_length], regular_token_indices[:max_length]
         else:
             i += 1
 
@@ -530,9 +527,9 @@ def encode_prompt(prompt, tokenizer, max_length=None):
         process_chunk(chunk)
 
     if max_length is not None:
-        return tokens[:max_length], regular_token_indices[:max_length]
+        return token_ids[:max_length], regular_token_indices[:max_length]
     else:
-        return tokens, regular_token_indices
+        return token_ids, regular_token_indices
 
 
 def make_hashable(obj):

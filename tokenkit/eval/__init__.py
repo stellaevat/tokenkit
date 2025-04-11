@@ -102,11 +102,6 @@ class JaxLM(lm_eval.api.model.LM):
         self.expand_input_ids_vocab = expand_input_ids_vocab
         self.expand_input_ids_embeddings = expand_input_ids_embeddings
 
-        # make sure this is padded
-        space_mask = utils.get_space_mask(self.tokenizer)[: self.config.vocab_size]
-        self.space_mask = np.zeros(self.config.vocab_size, dtype=bool)
-        self.space_mask[: len(space_mask)] = space_mask
-
         for length in list(lengths):
             if length > self.max_length:
                 logger.warning(
@@ -228,7 +223,7 @@ class JaxLM(lm_eval.api.model.LM):
                     (input_ids[i : i + batch_size, :length],),
                     input_ids[i : i + batch_size, :length],
                     suffix_mask[i : i + batch_size, :length],
-                    self.space_mask,
+                    None,
                     self.logit_mask,
                     ATOL,
                 )

@@ -109,6 +109,7 @@ class CrossTokenizerDistillArgs:
     side_path_mapping_mode: str | None = None
     side_path_distance_fn: str = "kl"
     alm_mode: str = "append_space"
+    space_mask_mode: str = "space+tab+newline+special"
     tokenizer_pair_data_path: str | None = None
     tokenizer_pair_bias_threshold: float = 1e-4
     tokenizer_pair_bias_threshold_side_path: str | None = None
@@ -576,8 +577,11 @@ def main(args: CrossTokenizerDistillArgs):
         student_config.tie_word_embeddings = False
         new_embeddings = jnp.tile(new_embeddings, (1, 2, 1))
 
-    space_mask_teacher = utils.get_space_mask(tokenizer_teacher)
-    space_mask_new = utils.get_space_mask(target_tokenizer)
+    space_mask_teacher = utils.get_space_mask(tokenizer_teacher, args.space_mask_mode)
+    space_mask_new = utils.get_space_mask(target_tokenizer, args.space_mask_mode)
+
+    logger.info(f"Space mask teacher sum: {space_mask_teacher.sum()}")
+    logger.info(f"Space mask new sum: {space_mask_new.sum()}")
 
     hypernet = Hypernet(
         dtype=dtype,

@@ -56,15 +56,27 @@ def get_large_negative_number(dtype: jnp.dtype | np.dtype, module=jnp) -> jax.Ar
     return module.asarray(-0.7 * dtype_max, dtype=dtype)
 
 
-def get_space_mask(tokenizer):
+def get_space_mask(tokenizer, space_mask_mode):
     space_mask = np.zeros(len(tokenizer), dtype=bool)
     tokens = tokenizer.convert_ids_to_tokens(np.arange(len(tokenizer)))
     special_token_ids = set(tokenizer.all_special_ids)
 
+    space_mask_modes = set(space_mask_mode.split("+"))
+
     for i, token in enumerate(tokens):
-        if (
-            len(token) > 0 and (token[0] == "Ġ" or token[0] == "Ċ" or token[0] == "ĉ")
-        ) or i in special_token_ids:
+        if len(token) == 0:
+            continue
+
+        if "space" in space_mask_modes and token[0] == "Ġ":
+            space_mask[i] = True
+
+        if "tab" in space_mask_modes and token[0] == "Ċ":
+            space_mask[i] = True
+
+        if "newline" in space_mask_modes and token[0] == "ĉ":
+            space_mask[i] = True
+
+        if "special" in space_mask_modes and i in special_token_ids:
             space_mask[i] = True
 
     return space_mask

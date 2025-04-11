@@ -64,7 +64,7 @@ class LossArgs:
     scalar_report: Any
 
 
-def compute_alm_latents_loss(args, loss_args):
+def compute_alm_latents_loss(args, loss_args, epsilon=1e-8):
     if args.latents_chunks == "naive":
         alignment_matrix_b_last_only_index, _ = get_last_index_per_column(
             loss_args.batch["alignment_matrix_b_unconstrained"]
@@ -135,26 +135,26 @@ def compute_alm_latents_loss(args, loss_args):
             layer_latent_loss /= (
                 jnp.square(t_aligned_last_hidden_state * mask[..., None]).mean()
                 / mask.mean()
-            ) + utils.EPSILON
+            ) + epsilon
         elif args.latents_normalization == "l2_channelwise":
             layer_latent_loss /= (
                 jnp.square(t_aligned_last_hidden_state * mask[..., None]).mean(
                     [0, 1], keepdims=True
                 )
                 / mask.mean()
-            ) + utils.EPSILON
+            ) + epsilon
         elif args.latents_normalization == "l1":
             layer_latent_loss /= (
                 jnp.abs(t_aligned_last_hidden_state * mask[..., None]).mean()
                 / mask.mean()
-            ) + utils.EPSILON
+            ) + epsilon
         elif args.latents_normalization == "l1_channelwise":
             layer_latent_loss /= (
                 jnp.abs(t_aligned_last_hidden_state * mask[..., None]).mean(
                     [0, 1], keepdims=True
                 )
                 / mask.mean()
-            ) + utils.EPSILON
+            ) + epsilon
 
         layer_latent_loss = layer_latent_loss.mean() / global_mask.mean()
         hidden_state_latent_loss += layer_latent_loss / len(layer_indices)
@@ -208,14 +208,14 @@ def compute_alm_latents_loss(args, loss_args):
     return loss
 
 
-def compute_clm_loss(args, loss_args):
-    clm_loss = cross_entropy(
+def compute_sft_loss(args, loss_args):
+    sft_loss = cross_entropy(
         loss_args.student_logits,
         loss_args.batch["input_ids_new"],
         loss_args.batch["loss_mask_new"],
         denom=loss_args.global_batch["loss_mask_new"][:, 1:].mean(),
     )
-    return clm_loss
+    return sft_loss
 
 
 def log1mexp(x):
@@ -321,6 +321,19 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
             return jnp.logaddexp(term1, term2) / (args.renyi_alpha - 1)
 
         diff_fn = renyi
+    elif args.alm_diff_fn == "joschu_k2":
+        def joschu_k2(log_y_true, log_y_pred):
+            logr = (log_y_true - log_y_pred) / args.bce_temp
+            return (logr ** 2) / 2
+
+        diff_fn = joschu_k2
+    elif args.alm_diff_fn == "joschu_k3":
+        def joschu_k3(log_y_true, log_y_pred):
+            logr = (log_y_true - log_y_pred) / args.bce_temp
+
+            return (jnp.exp(logr) - 1) - logr
+
+        diff_fn = joschu_k3
     else:
         raise NotImplementedError(f"Unknown diff function: {args.diff_fn}")
 
@@ -429,9 +442,15 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         batch_size = t_aligned_space_logp.shape[0]
         chunk_count = t_aligned_space_logp.shape[-1]
 
-        t_aligned_space_chunk_mask = jnp.exp(t_aligned_space_logp) > args.tokenizer_pair_bias_threshold
-        chunk_merging_indices = jnp.cumsum(t_aligned_space_chunk_mask[:, ::-1], -1)[:, ::-1]
-        chunk_merging_indices = chunk_merging_indices.max(-1, keepdims=True) - chunk_merging_indices
+        t_aligned_space_chunk_mask = (
+            jnp.exp(t_aligned_space_logp) > args.tokenizer_pair_bias_threshold
+        )
+        chunk_merging_indices = jnp.cumsum(t_aligned_space_chunk_mask[:, ::-1], -1)[
+            :, ::-1
+        ]
+        chunk_merging_indices = (
+            chunk_merging_indices.max(-1, keepdims=True) - chunk_merging_indices
+        )
         chunk_merging_values = aligned_count > 0
         chunk_merging_matrix = (
             jnp.zeros(
@@ -464,9 +483,16 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
 
         aligned_count = jnp.squeeze(aligned_count[:, None] @ chunk_merging_matrix, 1)
         global_aligned_count = jnp.squeeze(
-            aligned_count[:, None] @ chunk_merging_matrix, 1  # NB: cant merge global chunks :(
+            aligned_count[:, None] @ chunk_merging_matrix,
+            1,  # NB: cant merge global chunks :(
         )
 
+        teacher_chunk_sums_after_merge = aligned_count
+        teacher_avg_chunk_lengths_after_merge = (
+            teacher_chunk_sums_after_merge.mean() / (teacher_chunk_sums_after_merge > 0).mean()
+        )
+
+        loss_args.scalar_report["teacher_avg_chunk_lengths_after_merge"] = teacher_avg_chunk_lengths_after_merge
         loss_args.scalar_report["t_min_aligned_space_logp"] = (
             t_aligned_space_logp * (aligned_count > 0)
         ).min()
@@ -579,7 +605,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
 
 
 def compute_alm_side_path_loss(
-    chunk_kind, student_mapping, teacher_mapping, args, loss_args
+    chunk_kind, student_mapping, teacher_mapping, args, loss_args, epsilon=1e-8
 ):
     if chunk_kind == "unconstrained":
         alignment_matrix_a = loss_args.batch["alignment_matrix_a_unconstrained"]
@@ -662,8 +688,8 @@ def compute_alm_side_path_loss(
     ).mean() / mask.mean()
 
     if args.side_path_distance_fn == "kl":
-        s_remainder_probs = jnp.maximum(1 - s_aligned_probs.sum(-1), utils.EPSILON)
-        t_remainder_probs = jnp.maximum(1 - t_aligned_probs.sum(-1), utils.EPSILON)
+        s_remainder_probs = jnp.maximum(1 - s_aligned_probs.sum(-1), epsilon)
+        t_remainder_probs = jnp.maximum(1 - t_aligned_probs.sum(-1), epsilon)
 
         elementwise_loss = (
             (t_aligned_probs * (t_aligned_logprobs - s_aligned_logprobs)).sum(-1)
@@ -674,8 +700,8 @@ def compute_alm_side_path_loss(
         ) * mask
         side_path_loss = elementwise_loss.mean() / global_mask.mean()
     elif args.side_path_distance_fn == "reverse_kl":
-        s_remainder_probs = jnp.maximum(1 - s_aligned_probs.sum(-1), utils.EPSILON)
-        t_remainder_probs = jnp.maximum(1 - t_aligned_probs.sum(-1), utils.EPSILON)
+        s_remainder_probs = jnp.maximum(1 - s_aligned_probs.sum(-1), epsilon)
+        t_remainder_probs = jnp.maximum(1 - t_aligned_probs.sum(-1), epsilon)
 
         elementwise_loss = (
             (s_aligned_probs * (s_aligned_logprobs - t_aligned_logprobs)).sum(-1)
@@ -723,7 +749,7 @@ def compute_alm_side_path_loss(
     return side_path_loss
 
 
-def compute_baseline_dskd_loss(args, loss_args):
+def compute_baseline_dskd_loss(args, loss_args, epsilon=1e-8):
     s_target_embeds = loss_args.student_out.hidden_states[0][:, 1:]
     t_target_embeds = loss_args.teacher_out.hidden_states[0][:, 1:]
     s_hiddens = loss_args.student_out.hidden_states[-1][:, :-1]
@@ -844,7 +870,7 @@ def compute_baseline_dskd_loss(args, loss_args):
     ).mean() / (
         # can not use global batch since we do not have a global t2s_acc_mask
         (loss_args.batch["loss_mask_new"][:, 1:] * t2s_acc_mask).mean()
-        + utils.EPSILON
+        + epsilon
     )
 
     s2t_hiddens = (s2t_weight @ s_v_hiddens).astype(s_hiddens.dtype)

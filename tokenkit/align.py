@@ -1,7 +1,9 @@
 import numpy as np
+import logging
 
 from tokenkit.byteify import ByteifyTokenizer, load_byteify_tokenizer
 
+logger = logging.getLogger(__name__)
 
 def get_alignment_indices(
     tokens_teacher: list[str],
@@ -137,10 +139,15 @@ def get_alignment_indices(
         special_tokens_mask_student.append(True)
 
     if check:
-        for start_i, end_i, start_j, end_j in alignment_indices:
-            assert "".join(normalized_tokens_teacher[start_i:end_i]) == "".join(
+        to_remove = []
+        for alignment_idx, (start_i, end_i, start_j, end_j) in enumerate(alignment_indices):
+            if "".join(normalized_tokens_teacher[start_i:end_i]) != "".join(
                 normalized_tokens_student[start_j:end_j]
-            )
+            ):
+                logger.warning(f"Alignment mismatch: {normalized_tokens_teacher[start_i:end_i]} != {normalized_tokens_student[start_j:end_j]}")
+                to_remove.append(alignment_idx)
+
+        alignment_indices = [alignment_indices[i] for i in range(len(alignment_indices)) if i not in to_remove]
 
     return (
         alignment_indices,

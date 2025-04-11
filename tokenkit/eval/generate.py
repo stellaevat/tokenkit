@@ -63,36 +63,6 @@ class State:
     hidden_states: jnp.ndarray | None = None
 
 
-def get_expansion_matrix(
-    tokenizer, expand_input_ids_vocab, max_length=EXPAND_INPUT_IDS_MAX_LENGTH
-):
-    expansion_data = []
-    expansion_indices = []
-
-    vocab = tokenizer.get_vocab()
-
-    for key, value in expand_input_ids_vocab.items():
-        if key in vocab:
-            indices = [vocab[key] + 1]
-        else:
-            indices = [
-                x.id + 1 for x in tokenizer.backend_tokenizer.model.tokenize(key)
-            ][::-1][:max_length]
-        while len(indices) < max_length:
-            indices.append(0)
-
-        expansion_data.append(1 + value)
-        expansion_indices.append(indices)
-
-    expansion_data.insert(0, -1)
-    expansion_indices.insert(0, [0] * max_length)
-
-    return (
-        jnp.array(expansion_data, dtype=np.int32),
-        jnp.array(expansion_indices, dtype=np.int32),
-    )
-
-
 class Generator:
     def prefill(
         self,
@@ -158,10 +128,12 @@ class Generator:
 
         self.expand_input_ids = expand_input_ids
         if expand_input_ids:
-            self.expand_input_ids_matrix = get_expansion_matrix(
+            self.expand_input_ids_matrix = utils.get_expand_input_ids_matrix(
                 tokenizer, expand_input_ids_vocab
             )
-            self.expand_input_ids_vocab = expand_input_ids_vocab
+            self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
+                tokenizer, expand_input_ids_vocab
+            )
             self.expand_input_ids_embeddings = expand_input_ids_embeddings
 
         self.until_tokens = []
@@ -354,50 +326,10 @@ class Generator:
 
         if self.expand_input_ids:
             if expanded_input_ids is None:
-
-                @partial(jax.jit, static_argnums=(1,))
-                @partial(jax.vmap, in_axes=(0, None))
-                def moving_window(a, size: int):
-                    padded_a = jnp.pad(
-                        a, ((0, size - 1),), mode="constant", constant_values=0
-                    )
-                    starts = jnp.arange(len(a))
-                    return jax.vmap(
-                        lambda start: jax.lax.dynamic_slice(padded_a, (start,), (size,))
-                    )(starts)
-
-                input_ids_window = (
-                    moving_window(input_ids[:, ::-1], EXPAND_INPUT_IDS_MAX_LENGTH) + 1
-                )
-                input_ids_window_repeated = jnp.tril(
-                    jnp.tile(
-                        input_ids_window[:, :, None],
-                        (1, 1, EXPAND_INPUT_IDS_MAX_LENGTH, 1),
-                    )
-                )[:, ::-1, ::-1, :]
-
-                if last_only:
-                    input_ids_window_repeated = input_ids_window_repeated[:, -1:, :, :]
-
-                def inner_fn(lookup_tokens):
-                    return (
-                        (self.expand_input_ids_matrix[1] == lookup_tokens[None, :])
-                        .all(axis=-1)
-                        .argmax()
-                    )
-
-                expanded_indices = jax.vmap(inner_fn)(
-                    input_ids_window_repeated.reshape(-1, EXPAND_INPUT_IDS_MAX_LENGTH)
-                ).reshape(input_ids_window_repeated.shape[:-1])
-                expanded_input_ids = (
-                    self.expand_input_ids_matrix[0][
-                        jnp.take_along_axis(
-                            expanded_indices,
-                            (expanded_indices > 0).argmax(-1, keepdims=True),
-                            axis=-1,
-                        )[:, :, 0]
-                    ]
-                    - 1
+                expanded_input_ids = utils.jax_expand_input_ids(
+                    input_ids,
+                    self.expand_input_ids_matrix,
+                    last_only=last_only,
                 )
 
             expanded_inputs_embeds = jnp.take(
@@ -639,9 +571,7 @@ class Generator:
         all_running_tokens = []
 
         for prompt in tqdm(prompts, desc="Encoding prompts...", **(tqdm_kwargs or {})):
-            prompt_tokens = [
-                self.vocab[x] for x in utils.encode_prompt(prompt, self.tokenizer)[0]
-            ]
+            prompt_tokens = utils.encode_prompt(prompt, self.tokenizer)[0]
 
             all_prefill_tokens.append(prompt_tokens[:-1])
             all_running_tokens.append(prompt_tokens[-EXPAND_INPUT_IDS_MAX_LENGTH:])
@@ -715,11 +645,9 @@ class Generator:
                 cache = init_cache
             else:
                 if self.expand_input_ids:
-                    prefill_expanded_input_ids = utils.expand_input_ids(
+                    prefill_expanded_input_ids = utils.np_expand_input_ids(
                         prefill_input_ids,
-                        self.tokenizer,
-                        self.expand_input_ids_vocab,
-                        use_heuristic=True,
+                        self.expand_input_ids_dict,
                     )
                 else:
                     prefill_expanded_input_ids = np.zeros_like(prefill_input_ids)

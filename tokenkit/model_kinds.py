@@ -34,9 +34,9 @@ class BaseModelKind(ABC):
         "<|<start_header>|>",
         "<|<end_header>|>",
         "<|<eot>|>",
+        "<|<system_name>|>",
         "<|<user_name>|>",
         "<|<assistant_name>|>",
-        "<|<system_name>|>",
     ]
 
     def __init__(self):
@@ -82,11 +82,11 @@ class Qwen2ModelKind(BaseModelKind):
             "<|<pad>|>": ["<|endoftext|>"],
             "<|<start_header>|>": ["<|im_start|>"],
             "<|<end_header>|>": ["Ċ"],
-            "<|<eot>|>": ["<|im_end|>", "Ċ"],
             "<|<eos>|>": ["<|endoftext|>"],
+            "<|<eot>|>": ["<|im_end|>", "Ċ"],
+            "<|<system_name>|>": ["system"],
             "<|<user_name>|>": ["user"],
             "<|<assistant_name>|>": ["assistant"],
-            "<|<system_name>|>": ["system"],
         }
 
 
@@ -108,11 +108,12 @@ class Llama3ModelKind(BaseModelKind):
             "<|<pad>|>": ["<|end_of_text|>"],
             "<|<start_header>|>": ["<|start_header_id|>"],
             "<|<end_header>|>": ["<|end_header_id|>", "ĊĊ"],
-            "<|<eot>|>": ["<|eot_id|>"],
+            # give eot precedence over eos - not ideal but should work for chat templates
             "<|<eos>|>": ["<|eot_id|>"],
+            "<|<eot>|>": ["<|eot_id|>"],
+            "<|<system_name>|>": ["system"],
             "<|<user_name>|>": ["user"],
             "<|<assistant_name>|>": ["assistant"],
-            "<|<system_name>|>": ["system"],
         }
 
 
@@ -133,11 +134,11 @@ class Gemma2ModelKind(BaseModelKind):
             "<|<pad>|>": ["<pad>"],
             "<|<start_header>|>": ["<start_of_turn>"],
             "<|<end_header>|>": ["Ċ"],
-            "<|<eot>|>": ["<end_of_turn>", "Ċ"],
             "<|<eos>|>": ["<eos>"],
+            "<|<eot>|>": ["<end_of_turn>", "Ċ"],
+            "<|<system_name>|>": ["user"],
             "<|<user_name>|>": ["user"],
             "<|<assistant_name>|>": ["model"],
-            "<|<system_name>|>": ["user"],
         }
 
 
@@ -153,8 +154,9 @@ class Phi3ModelKind(BaseModelKind):
             "<|<pad>|>": ["<|endoftext|>"],
             "<|<start_header>|>": None,
             "<|<end_header>|>": ["Ċ"],
-            "<|<eot>|>": ["<|end|>", "Ċ"],
             "<|<eos>|>": ["<|endoftext|>"],
+            "<|<eot>|>": ["<|end|>", "Ċ"],
+            "<|<system_name>|>": ["<|user|>"],
             "<|<user_name>|>": ["<|user|>"],
             "<|<assistant_name>|>": ["<|assistant|>"],
         }
@@ -172,8 +174,9 @@ class GPT2ModelKind(BaseModelKind):
             "<|<pad>|>": ["<|endoftext|>"],
             "<|<start_header>|>": None,
             "<|<end_header>|>": None,
-            "<|<eot>|>": ["<|endoftext|>"],
             "<|<eos>|>": ["<|endoftext|>"],
+            "<|<eot>|>": ["<|endoftext|>"],
+            "<|<system_name>|>": None,
             "<|<user_name>|>": None,
             "<|<assistant_name>|>": None,
         }

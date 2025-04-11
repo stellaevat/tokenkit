@@ -49,8 +49,6 @@ def to_byte_level_tokenizer(
         token for token in CHARS_TO_BYTES.keys() if token not in byte_tokens_in_vocab
     ]
 
-    unk_token = model_kind_cls.replacements["<|<pad>|>"][0]
-
     if len(byte_tokens_not_in_vocab) > 0:
         logger.warning(
             f"Some byte tokens not in vocab: {byte_tokens_not_in_vocab}. Adding these to the vocab. They will not have a good init."
@@ -66,13 +64,10 @@ def to_byte_level_tokenizer(
     byte_tokenizer.backend_tokenizer.pre_tokenizer = (
         tokenizers.pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False)
     )
-    byte_tokenizer.backend_tokenizer.model = tokenizers.models.WordPiece(
-        byte_vocab,
-        unk_token=unk_token,
-        max_input_chars_per_word=1_000_000,  # effectively disable limit on input chars
+    byte_tokenizer.backend_tokenizer.model = tokenizers.models.Unigram(
+        [(token, 0.0) for token in tokens],
     )
     byte_tokenizer.backend_tokenizer.decoder = tokenizers.decoders.ByteLevel()
-    byte_tokenizer.unk_token = unk_token
 
     # remove added tokens, they would persist to the old vocabulary id
     f = NamedTemporaryFile()
@@ -86,7 +81,6 @@ def to_byte_level_tokenizer(
     json.dump(tokenizer_data, open(f.name, "w"))
 
     byte_tokenizer._tokenizer = Tokenizer.from_file(f.name)
-    byte_tokenizer._tokenizer.model.continuing_subword_prefix = ""
 
     return byte_tokenizer
 

@@ -515,8 +515,8 @@ class LockstepJaxLM(lm_eval.api.model.LM):
 
     def _encode_batch(
         self,
-        all_prefix_tokens,
-        all_suffix_tokens,
+        all_prefix_token_ids,
+        all_suffix_token_ids,
         all_regular_token_ids,
         max_length,
     ):
@@ -524,39 +524,33 @@ class LockstepJaxLM(lm_eval.api.model.LM):
             tokenizer = self.tokenizers[model_idx]
 
             input_ids = np.full(
-                (len(all_prefix_tokens), max_length),
+                (len(all_prefix_token_ids), max_length),
                 fill_value=tokenizer.pad_token_id,
                 dtype=np.int32,
             )
             attention_mask = np.zeros(
-                (len(all_prefix_tokens), max_length), dtype=np.int32
+                (len(all_prefix_token_ids), max_length), dtype=np.int32
             )
             regular_token_ids = np.full(
-                (len(all_prefix_tokens), max_length), fill_value=-1, dtype=np.int32
+                (len(all_prefix_token_ids), max_length), fill_value=-1, dtype=np.int32
             )
 
-            for i in range(len(all_prefix_tokens)):
-                current_prefix_tokens = all_prefix_tokens[i][model_idx]
-                current_suffix_tokens = all_suffix_tokens[i][model_idx]
+            for i in range(len(all_prefix_token_ids)):
+                current_prefix_token_ids = all_prefix_token_ids[i][model_idx]
+                current_suffix_token_ids = all_suffix_token_ids[i][model_idx]
                 current_regular_token_ids = all_regular_token_ids[i][model_idx]
 
-                current_prefix_input_ids = tokenizer.convert_tokens_to_ids(
-                    current_prefix_tokens
-                )
-                current_suffix_input_ids = tokenizer.convert_tokens_to_ids(
-                    current_suffix_tokens
-                )
-                input_ids[i, : len(current_prefix_input_ids)] = current_prefix_input_ids
+                input_ids[i, : len(current_prefix_token_ids)] = current_prefix_token_ids
                 input_ids[
                     i,
-                    len(current_prefix_input_ids) : len(current_prefix_input_ids)
-                    + len(current_suffix_input_ids),
-                ] = current_suffix_input_ids
+                    len(current_prefix_token_ids) : len(current_prefix_token_ids)
+                    + len(current_suffix_token_ids),
+                ] = current_suffix_token_ids
                 regular_token_ids[i, : len(current_regular_token_ids)] = (
                     current_regular_token_ids
                 )
                 attention_mask[
-                    i, : len(current_prefix_input_ids) + len(current_suffix_input_ids)
+                    i, : len(current_prefix_token_ids) + len(current_suffix_token_ids)
                 ] = 1
 
             return {
@@ -590,7 +584,7 @@ class LockstepJaxLM(lm_eval.api.model.LM):
         inv_regular_token_ids_mask = np.zeros_like(inv_regular_token_ids).astype(bool)
 
         for model_idx in range(len(self.models)):
-            for example_idx in range(len(all_prefix_tokens)):
+            for example_idx in range(len(all_prefix_token_ids)):
                 current_inv_ids = np.where(
                     stacked_encodings["regular_token_ids"][example_idx, model_idx] != -1
                 )[0]
@@ -630,8 +624,8 @@ class LockstepJaxLM(lm_eval.api.model.LM):
         prefixes = [x.args[0] for x in requests]
         suffixes = [x.args[1] for x in requests]
 
-        all_prefix_tokens = []
-        all_suffix_tokens = []
+        all_prefix_token_ids = []
+        all_suffix_token_ids = []
         all_regular_token_ids = []
         all_max_total_lengths = []
 
@@ -640,17 +634,17 @@ class LockstepJaxLM(lm_eval.api.model.LM):
             total=len(prefixes),
             desc="Encoding prompts...",
         ):
-            current_prefix_tokens = []
-            current_suffix_tokens = []
+            current_prefix_token_ids = []
+            current_suffix_token_ids = []
             current_regular_token_ids = []
 
             for model_idx in range(len(self.models)):
-                prefix_tokens, prefix_regular_token_ids = utils.encode_prompt(
+                prefix_token_ids, prefix_regular_token_ids = utils.encode_prompt(
                     utils.preprocess_prompt(prefix, "direct_encode_no_force_eos"),
                     self.tokenizers[model_idx],
                     max_length=self.lengths[-1],
                 )
-                suffix_tokens, suffix_regular_token_ids = utils.encode_prompt(
+                suffix_token_ids, suffix_regular_token_ids = utils.encode_prompt(
                     utils.preprocess_prompt(
                         suffix, "direct_encode_no_force_bos_no_force_eos"
                     ),
@@ -659,43 +653,43 @@ class LockstepJaxLM(lm_eval.api.model.LM):
                 )
 
                 # best-effort truncation from the left
-                while len(prefix_tokens) + len(suffix_tokens) > self.lengths[-1]:
-                    del prefix_tokens[0]
+                while len(prefix_token_ids) + len(suffix_token_ids) > self.lengths[-1]:
+                    del prefix_token_ids[0]
 
-                if len(prefix_tokens) == 0:
+                if len(prefix_token_ids) == 0:
                     raise ValueError(
                         f"Prefix is empty after truncation to length {self.lengths[-1]}"
                     )
 
-                current_prefix_tokens.append(prefix_tokens)
-                current_suffix_tokens.append(suffix_tokens)
+                current_prefix_token_ids.append(prefix_token_ids)
+                current_suffix_token_ids.append(suffix_token_ids)
                 current_regular_token_ids.append(
                     [-1] * len(prefix_regular_token_ids) + suffix_regular_token_ids
                 )
 
-            all_prefix_tokens.append(current_prefix_tokens)
-            all_suffix_tokens.append(current_suffix_tokens)
+            all_prefix_token_ids.append(current_prefix_token_ids)
+            all_suffix_token_ids.append(current_suffix_token_ids)
             all_regular_token_ids.append(current_regular_token_ids)
             all_max_total_lengths.append(
                 max(
                     len(prefix) + len(suffix)
                     for prefix, suffix in zip(
-                        current_prefix_tokens, current_suffix_tokens
+                        current_prefix_token_ids, current_suffix_token_ids
                     )
                 )
             )
 
         permutation = np.argsort(all_max_total_lengths)[::-1]
-        n_batches = math.ceil(len(all_prefix_tokens) / self.max_batch_size)
+        n_batches = math.ceil(len(all_prefix_token_ids) / self.max_batch_size)
 
-        output = [None for _ in range(len(all_prefix_tokens))]
+        output = [None for _ in range(len(all_prefix_token_ids))]
 
         for batch_idx in tqdm(
             range(n_batches), desc="Running loglikelihood requests..."
         ):
             start, end = (
                 batch_idx * self.max_batch_size,
-                min((batch_idx + 1) * self.max_batch_size, len(all_prefix_tokens)),
+                min((batch_idx + 1) * self.max_batch_size, len(all_prefix_token_ids)),
             )
 
             batch_max_length = max(
@@ -715,8 +709,8 @@ class LockstepJaxLM(lm_eval.api.model.LM):
             for i in range(0, self.max_batch_size, batch_size):
                 batch_indices = permutation[start:end][i : i + batch_size]
                 batch = self._encode_batch(
-                    [all_prefix_tokens[j] for j in batch_indices],
-                    [all_suffix_tokens[j] for j in batch_indices],
+                    [all_prefix_token_ids[j] for j in batch_indices],
+                    [all_suffix_token_ids[j] for j in batch_indices],
                     [all_regular_token_ids[j] for j in batch_indices],
                     length,
                 )

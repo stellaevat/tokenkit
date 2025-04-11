@@ -15,10 +15,9 @@ class TokenizerAlignerCollator:
         tokenizer_new,
         max_teacher_length,
         max_student_length,
-        special_tokens_mode,
-        with_expanded_input_ids=False,
         use_chat_template=False,
         chat_template_mode="direct_encode",
+        expand_input_ids_dict=None,
         loss_mask_mode=None,
         tokenizer_pair_data_path=None,
         tokenizer_pair_bias_threshold=0.0,
@@ -29,10 +28,9 @@ class TokenizerAlignerCollator:
         self.tokenizer_new = tokenizer_new
         self.max_teacher_length = max_teacher_length
         self.max_student_length = max_student_length
-        self.special_tokens_mode = special_tokens_mode
-        self.with_expanded_input_ids = with_expanded_input_ids
         self.use_chat_template = use_chat_template
         self.chat_template_mode = chat_template_mode
+        self.expand_input_ids_dict = expand_input_ids_dict
 
         if loss_mask_mode is None:
             loss_mask_string = None
@@ -136,12 +134,10 @@ class TokenizerAlignerCollator:
         attention_mask = np.zeros((len(texts), max_length), dtype=np.int32)
 
         for i in range(len(texts)):
-            current_input_ids = tokenizer.convert_tokens_to_ids(
-                utils.encode_prompt(
-                    utils.preprocess_prompt(texts[i], self.chat_template_mode),
-                    tokenizer,
-                    max_length=max_length,
-                )[0]
+            current_input_ids, _ = utils.encode_prompt(
+                utils.preprocess_prompt(texts[i], self.chat_template_mode),
+                tokenizer,
+                max_length=max_length,
             )
             input_ids[i, : len(current_input_ids)] = current_input_ids
             attention_mask[i, : len(current_input_ids)] = 1
@@ -275,12 +271,10 @@ class TokenizerAlignerCollator:
             "loss_mask_new": loss_mask_new,
         }
 
-        if self.with_expanded_input_ids:
-            batch["expanded_input_ids_new"] = utils.expand_input_ids(
+        if self.expand_input_ids_dict is not None:
+            batch["expanded_input_ids_new"] = utils.np_expand_input_ids(
                 input_ids_new,
-                tokenizer=self.tokenizer_new,
-                original_vocab=self.tokenizer_original_vocab,
-                use_heuristic=True,
+                self.expand_input_ids_dict,
             )
 
         return batch
@@ -303,7 +297,7 @@ class TokenizerAlignerCollator:
             "loss_mask_new": P("data", None),
         }
 
-        if self.with_expanded_input_ids:
+        if self.expand_input_ids_dict is not None:
             batch_specs["expanded_input_ids_new"] = P("data", None)
 
         return batch_specs

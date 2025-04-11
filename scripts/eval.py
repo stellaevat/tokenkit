@@ -186,6 +186,11 @@ def my_app(args: DictConfig) -> None:
 
     if args.expand_input_ids:
         # TODO: move elsewhere, probably into jaxlm
+        expand_input_ids_dict = utils.get_expand_input_ids_dict(
+            tokenizer,
+            expand_vocab,
+        )
+
         def compute_inputs_embeds(model_params, input_ids, expanded_input_ids):
             input_embeddings = param.get(
                 model_params, param.get_input_embedding_path(config.model_type)
@@ -250,12 +255,9 @@ def my_app(args: DictConfig) -> None:
         def jaxlm_score_fn(model_fn, params, model_args, *pargs):
             (input_ids,) = model_args
 
-            expanded_input_ids = utils.expand_input_ids(
+            expanded_input_ids = utils.np_expand_input_ids(
                 input_ids,
-                tokenizer=tokenizer,
-                original_vocab=expand_vocab,
-                use_heuristic=True,
-                maxlen=16,
+                expand_input_ids_dict,
             )
 
             return jaxlm_inner_score_fn(

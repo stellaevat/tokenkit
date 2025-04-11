@@ -9,9 +9,10 @@ from functools import partial
 from pathlib import Path
 from pprint import pformat
 from typing import Any
+from dataclasses import dataclass, asdict, field
+import yaml
 
 import datasets
-import hydra
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,19 +23,98 @@ from flax.training import common_utils, train_state
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from omegaconf import DictConfig, OmegaConf
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoConfig, FlaxAutoModelForCausalLM
 
 import wandb
-from tokenkit import data, eval, gcs_utils, utils
+from tokenkit import data, eval, gcs_utils, parse_args, utils
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.models import lora, param, sharding
 from tokenkit.models.hypernet import Hypernet
-from tokenkit.training import checkpoint, collators, losses, lr, opt
+from tokenkit.training import checkpoint, collators, losses, lr, opt, multitask
 from tokenkit.utils import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class BaselineArgs:
+    divergence: str = "srkl"
+    dskd_use_causal_attention_mask: bool = False
+    adaptive_kl_alpha: float = 0.5
+    skew_lambda: float = 0.1
+    teacher_temperature: float = 1.0
+    kd_rate: float = 0.5
+    kd_temp: float = 2.0
+
+
+@dataclass
+class CrossTokenizerDistillArgs:
+    losses: list[str]
+    steps: int
+    warmup_steps: int
+    name: str
+    output: str
+    num_workers: int
+    log_interval: int
+    sync_interval: int
+    eval_interval: int
+    save_interval: int
+    target_tokenizer_name: str
+    data: parse_args.DataArgs
+    hypernet: parse_args.HypernetArgs
+    optimizer: parse_args.OptimizerArgs
+    eval: parse_args.EvalArgs
+    student: parse_args.ModelArgs
+    teacher: parse_args.ModelArgs | None = None
+    baseline: BaselineArgs = field(default_factory=BaselineArgs)
+    dtype: str = "bfloat16"
+    debug: bool = False
+    seed: int = 1234
+    max_teacher_length: int = 512
+    max_student_length: int = 512
+    pad_to_multiple_of: int = 64
+    eval_at_step_zero: bool = False
+    save_at_step_zero: bool = False
+    skip_lm_eval: bool = False
+    output_embeddings_mode: str = "preserve"
+    use_chat_template: bool = True
+    chat_template_mode: str = "direct_encode"
+    loss_mask_mode: str | None = None
+    gradient_checkpointing: bool = False
+    do_cost_analysis: bool = False
+    dry_run: bool = False
+    n_data_parallel: int = 1
+    n_model_parallel: int = 8
+    loss_weights: list[float] | None = None
+    loss_weight_mode: str | None = None
+    uncertainty_s_init: float = 0
+    loss_schedules: list[str] | None = None
+    ema_alpha: float = 0.95
+    multitask_aggregation_fn: str | None = None
+    bce_temp: float = 100.0
+    distill_chunk_sizes: list[int] = field(default_factory=lambda: [1])
+    alm_diff_fn: str = "binary_ce"
+    distill_main_path_numerator: str = "chunk_count"
+    distill_main_path_denominator: str = "chunk_count"
+    train_model_mode: str = "lora"
+    model_lora_rank: int = 64
+    model_lora_alpha: int = 64
+    train_embeddings: bool = True
+    tokens_to_add: list[str] | None = None
+    latents_to_align: str = "last_hidden_state"
+    latents_normalization: str = "l2_channelwise"
+    latents_chunks: str = "naive"
+    latents_do_project: bool = False
+    side_path_mapping_mode: str | None = None
+    side_path_distance_fn: str = "kl"
+    alm_mode: str = "append_space"
+    tokenizer_pair_data_path: str | None = None
+    tokenizer_pair_bias_threshold: float = 1e-4
+    tokenizer_pair_bias_threshold_side_path: str | None = None
+    expand_input_ids: bool = False
+    export_to_gcs_bucket: str | None = None
+    ppl_eval_data: parse_args.DataArgs | None = None
 
 
 class TrainState(train_state.TrainState):
@@ -117,7 +197,7 @@ def get_state(
         ),
     }
 
-    if args.add_expanded_input_ids:
+    if args.expand_input_ids:
         n_pad_original = utils.get_n_pad(
             original_embeddings.shape[0], args.pad_to_multiple_of
         )
@@ -310,11 +390,8 @@ def pad_embeddings_with_random(embeddings, tokenizer, seed=1234):
     )
 
 
-@hydra.main(
-    version_base=None, config_path="../configs", config_name="cross_tokenizer_distill"
-)
-def my_app(args: DictConfig) -> None:
-    logger.info(pformat(OmegaConf.to_object(args)))
+def main(args: CrossTokenizerDistillArgs):
+    logger.info(pformat(args))
 
     if args.debug:
         jax.config.update("jax_default_device", jax.devices("cpu")[0])
@@ -327,14 +404,15 @@ def my_app(args: DictConfig) -> None:
     shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    OmegaConf.save(config=args, f=output_dir / "args.yaml", resolve=True)
+    with open(output_dir / "args.yaml", "w") as f:
+        yaml.dump(asdict(args), f)
 
-    if hasattr(args, "teacher"):
-        teacher_config = AutoConfig.from_pretrained(**args.teacher)
+    if args.teacher is not None:
+        teacher_config = AutoConfig.from_pretrained(**asdict(args.teacher))
     else:
-        teacher_config = AutoConfig.from_pretrained(**args.student)
+        teacher_config = AutoConfig.from_pretrained(**asdict(args.student))
 
-    student_config = AutoConfig.from_pretrained(**args.student)
+    student_config = AutoConfig.from_pretrained(**asdict(args.student))
 
     teacher_config.max_length = args.max_teacher_length
     if not args.debug and args.max_teacher_length % 128 == 0:
@@ -359,12 +437,15 @@ def my_app(args: DictConfig) -> None:
     dtype = getattr(jnp, args.dtype)
 
     # prepare dataset
-    dataset = data.get_dataset(**args.data, seed=args.seed)
-    ppl_eval_data = data.get_dataset(**args.ppl_eval_data, seed=args.seed)
+    dataset = data.get_dataset(**asdict(args.data), seed=args.seed)
+    if args.ppl_eval_data is not None:
+        ppl_eval_data = data.get_dataset(**asdict(args.ppl_eval_data), seed=args.seed)
+    else:
+        ppl_eval_data = None
 
-    student_model_kwargs = dict(args.student)
+    student_model_kwargs = asdict(args.student)
     teacher_model_kwargs = (
-        dict(args.teacher) if hasattr(args, "teacher") else dict(args.student)
+        asdict(args.teacher) if args.teacher is not None else asdict(args.student)
     )
     original_student_tokenizer_name = student_model_kwargs.pop("tokenizer_name")
     teacher_tokenizer_name = teacher_model_kwargs.pop("tokenizer_name")
@@ -465,7 +546,7 @@ def my_app(args: DictConfig) -> None:
             embeddings, tokenizer_student_original, seed=args.seed
         )
 
-    if args.target_tokenizer == "keep":
+    if target_tokenizer_name == original_student_tokenizer_name:
         new_embeddings = embeddings
         if len(new_embeddings) < len(target_tokenizer):
             logger.warning(
@@ -504,16 +585,16 @@ def my_app(args: DictConfig) -> None:
         num_embeddings=1 if student_config.tie_word_embeddings else 2,
         max_seq_length=1,
         vocab_size=len(target_tokenizer),  # TODO: implement vocab padding
-        **args.hypernet,
+        **asdict(args.hypernet),
     )
 
-    optimizer_kwargs = OmegaConf.to_object(args.optimizer)
+    optimizer_kwargs = asdict(args.optimizer)
     learning_rate_fn = lr.linear_warmup_linear_decay_with_linear_prefix(
         optimizer_kwargs.pop("learning_rate"),
         args.steps,
         args.warmup_steps,
-        args.prefix_steps,
-        args.prefix_lr,
+        0,
+        0,
     )
 
     shard_patterns = {
@@ -570,15 +651,22 @@ def my_app(args: DictConfig) -> None:
     utils.param_report(state.params, state.train_mask)
     train_mask = jax.device_get(state.train_mask)
 
+    if args.expand_input_ids:
+        expand_input_ids_dict = utils.get_expand_input_ids_dict(
+            target_tokenizer,
+            tokenizer_student_original.get_vocab(),
+        )
+    else:
+        expand_input_ids_dict = None
+
     collator = collators.TokenizerAlignerCollator(
         tokenizer_teacher,
         target_tokenizer,
         max_teacher_length=args.max_teacher_length,
         max_student_length=args.max_student_length,
-        special_tokens_mode=args.special_tokens_mode,
-        with_expanded_input_ids=args.add_expanded_input_ids,
         use_chat_template=args.use_chat_template,
         chat_template_mode=args.chat_template_mode,
+        expand_input_ids_dict=expand_input_ids_dict,
         loss_mask_mode=args.loss_mask_mode,
         tokenizer_pair_data_path=args.tokenizer_pair_data_path,
         tokenizer_pair_bias_threshold=args.tokenizer_pair_bias_threshold,
@@ -591,15 +679,18 @@ def my_app(args: DictConfig) -> None:
         num_workers=args.num_workers,
         collate_fn=collator,
     )
-    ppl_eval_dataloader = torch.utils.data.DataLoader(
-        ppl_eval_data.get_torch_dataset(),
-        batch_size=1,
-        num_workers=args.num_workers,
-        collate_fn=collator,
-    )
+    if ppl_eval_data is not None:
+        ppl_eval_dataloader = torch.utils.data.DataLoader(
+            ppl_eval_data.get_torch_dataset(),
+            batch_size=1,
+            num_workers=args.num_workers,
+            collate_fn=collator,
+        )
+    else:
+        ppl_eval_dataloader = None
 
     if jax.process_index() == 0:
-        wandb.init(project="tokenkit", name=args.name, config=OmegaConf.to_object(args))
+        wandb.init(project="tokenkit", name=args.name, config=asdict(args))
         wandb.run.log_code()
 
     def predict_embeddings(params):  # TODO: add indices for subsampling
@@ -625,7 +716,7 @@ def my_app(args: DictConfig) -> None:
         )
 
         # NOTE: this assumes Llama/Gemma-style where position embeddings are part of attention mechanism
-        if args.add_expanded_input_ids:
+        if args.expand_input_ids:
             standard_inputs_embeds = jnp.take(
                 input_embeddings,
                 input_ids,
@@ -648,7 +739,14 @@ def my_app(args: DictConfig) -> None:
         return inputs_embeds
 
     def train_step(state, batch, global_batch):
-        def compute_loss(params):
+        def compute_loss(trainable_params, non_trainable_params, aggregate_losses=True):
+            params = jax.tree.map(
+                lambda x, y: x if y is None else y,
+                trainable_params,
+                non_trainable_params,
+                is_leaf=lambda x: x is None,
+            )
+
             scalar_report = {}  # extra logging
 
             if args.train_model_mode == "lora":
@@ -672,7 +770,7 @@ def my_app(args: DictConfig) -> None:
                 config=teacher_config,
             )
 
-            need_teacher = len([loss for loss in args.losses if loss != "clm"]) > 0
+            need_teacher = len([loss for loss in args.losses if loss != "sft"]) > 0
             if need_teacher:
                 teacher_out = teacher_model_fn(
                     input_ids=batch["input_ids_original"],
@@ -760,23 +858,14 @@ def my_app(args: DictConfig) -> None:
                 scalar_report=scalar_report,
             )
 
-            total_loss = 0.0
+            loss_values = jnp.zeros(len(args.losses), dtype=jnp.float32)
             loss_ema_stats = state.loss_ema_stats
 
             for loss_idx, loss in enumerate(args.losses):
-                if loss == "clm":
-                    current_loss = losses.compute_clm_loss(args, loss_args)
+                if loss == "sft":
+                    current_loss = losses.compute_sft_loss(args, loss_args)
                 elif loss == "alm_latents":
                     current_loss = losses.compute_alm_latents_loss(args, loss_args)
-                elif loss.startswith("alm"):
-                    kind = loss[len("alm_") :]
-                    if len(kind) == 0:
-                        kind = "unbiased"
-                    current_loss = losses.compute_alm_loss(
-                        chunk_kind=kind,
-                        args=args,
-                        loss_args=loss_args,
-                    )
                 elif loss.startswith("alm_side_path"):
                     kind = loss[len("alm_side_path_") :]
                     if len(kind) == 0:
@@ -788,6 +877,15 @@ def my_app(args: DictConfig) -> None:
                         args=args,
                         loss_args=loss_args,
                     )
+                elif loss.startswith("alm"):
+                    kind = loss[len("alm_") :]
+                    if len(kind) == 0:
+                        kind = "unbiased"
+                    current_loss = losses.compute_alm_loss(
+                        chunk_kind=kind,
+                        args=args,
+                        loss_args=loss_args,
+                    )
                 elif loss == "baseline_dskd":
                     current_loss = losses.compute_baseline_dskd_loss(args, loss_args)
                 elif loss == "baseline_uld":
@@ -796,6 +894,8 @@ def my_app(args: DictConfig) -> None:
                     current_loss = losses.compute_baseline_mined_loss(
                         mined_mapping, args, loss_args
                     )
+                else:
+                    raise ValueError(f"Invalid loss: {loss}")
 
                 weight = (
                     args.loss_weights[loss_idx]
@@ -826,13 +926,14 @@ def my_app(args: DictConfig) -> None:
                 scalar_report[f"loss/{loss}_weight"] = weight
 
                 if args.loss_weight_mode == "balance":
-                    total_loss += (
+                    loss_values = loss_values.at[loss_idx].set(
                         weight * current_loss / jax.lax.stop_gradient(current_loss)
                     )
                 elif args.loss_weight_mode == "uncertainty":
                     uncertainty_s = params["loss_weights"][loss_idx]
-                    total_loss += weight * current_loss * jnp.exp(-uncertainty_s) + (
-                        uncertainty_s / 2
+                    loss_values = loss_values.at[loss_idx].set(
+                        weight * current_loss * jnp.exp(-uncertainty_s)
+                        + (uncertainty_s / 2)
                     )
                     scalar_report[f"loss/uncertainty_s_{loss}"] = uncertainty_s
                 elif args.loss_weight_mode == "ema":
@@ -863,26 +964,79 @@ def my_app(args: DictConfig) -> None:
                     scalar_report[f"loss/{loss}_normalized"] = normalized_loss
                     scalar_report[f"loss/{loss}_ema_mean"] = loss_ema_stats[loss_idx, 0]
                     scalar_report[f"loss/{loss}_ema_var"] = loss_ema_stats[loss_idx, 1]
-                    total_loss += weight * normalized_loss
+                    loss_values = loss_values.at[loss_idx].set(weight * normalized_loss)
                 else:
-                    total_loss += weight * current_loss
+                    loss_values = loss_values.at[loss_idx].set(weight * current_loss)
 
-            return total_loss, (scalar_report, loss_ema_stats)
+            if aggregate_losses:
+                return jnp.sum(loss_values), (
+                    scalar_report,
+                    loss_ema_stats,
+                    loss_values,
+                )
+            else:
+                return loss_values, (scalar_report, loss_ema_stats, loss_values)
 
-        grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-        (loss, (scalar_report, loss_ema_stats)), grad = grad_fn(state.params)
+        trainable_params = jax.tree.map(
+            lambda x, m: x if m else None, state.params, train_mask
+        )
+        non_trainable_params = jax.tree.map(
+            lambda x, m: x if not m else None, state.params, train_mask
+        )
 
-        def prefix_freeze(grad):
-            for key in grad:
-                if key not in {"new_embeddings"}:
-                    grad[key] = jax.tree.map(lambda x: jnp.zeros_like(x), grad[key])
+        if args.multitask_aggregation_fn is None:
+            grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
+            (loss, (scalar_report, loss_ema_stats, _)), grad = grad_fn(
+                trainable_params, non_trainable_params
+            )
+        else:
+            jac_fn = jax.jacrev(
+                partial(compute_loss, aggregate_losses=False), has_aux=True
+            )
+            (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(
+                trainable_params, non_trainable_params
+            )
 
-            grad["new_embeddings"] *= ~overlapping_embeddings_mask[:, None, None]
+            global_grad_norms_before_agg = multitask.compute_global_grad_norm(grads)
 
-            return grad
+            mt_agg_fns = args.multitask_aggregation_fn.split("+")
+            for mt_agg_fn in mt_agg_fns:
+                mt_agg_args = mt_agg_fn.split(":")
+                mt_agg_fn = mt_agg_args[0]
+                mt_agg_extra_args = tuple(json.loads(x) for x in mt_agg_args[1:])
 
-        grad = jax.lax.cond(
-            state.step < args.prefix_steps, prefix_freeze, lambda grad: grad, grad
+                if mt_agg_fn == "pcgrad":
+                    grads = multitask.pcgrad(grads, *mt_agg_extra_args)
+                elif mt_agg_fn == "gradmag":
+                    grads = multitask.gradmag(grads, *mt_agg_extra_args)
+                elif mt_agg_fn == "gradclip":
+                    grads = multitask.gradclip(grads, *mt_agg_extra_args)
+                elif mt_agg_fn == "identity":
+                    pass
+                else:
+                    raise ValueError(
+                        f"Invalid multitask aggregation function: {mt_agg_fn}"
+                    )
+
+            global_grad_norms_after_agg = multitask.compute_global_grad_norm(grads)
+
+            for loss_idx, loss in enumerate(args.losses):
+                scalar_report[f"loss/{loss}_loss_value"] = loss_values[loss_idx]
+                scalar_report[f"loss/{loss}_global_grad_norm_before_agg"] = (
+                    global_grad_norms_before_agg[loss_idx]
+                )
+                scalar_report[f"loss/{loss}_global_grad_norm_after_agg"] = (
+                    global_grad_norms_after_agg[loss_idx]
+                )
+
+            grad = jax.tree.map(lambda task_grads: jnp.sum(task_grads, axis=0), grads)
+            loss = jnp.sum(loss_values)
+
+        grad = jax.tree.map(
+            lambda g, p: g if g is not None else jnp.zeros_like(p),
+            grad,
+            state.params,
+            is_leaf=lambda x: x is None,
         )
         new_state = state.apply_gradients(grads=grad, loss_ema_stats=loss_ema_stats)
 
@@ -912,7 +1066,6 @@ def my_app(args: DictConfig) -> None:
         inputs_embeds_new = compute_inputs_embeds(
             model_params_with_embeddings,
             batch["input_ids_new"],
-            batch.get("expanded_input_ids_new"),
         )
 
         logits = new_model_fn(
@@ -1010,7 +1163,7 @@ def my_app(args: DictConfig) -> None:
     upload_executor = None
     upload_name = args.name + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
 
-    grad_acc_steps = args.optimizer.get("grad_acc_steps") or 1
+    grad_acc_steps = args.optimizer.grad_acc_steps if args.optimizer.grad_acc_steps is not None else 1
     assert args.data.batch_size % grad_acc_steps == 0
     local_batch_size = args.data.batch_size // grad_acc_steps
 
@@ -1075,14 +1228,13 @@ def my_app(args: DictConfig) -> None:
             step == 0 and args.eval_at_step_zero
         ):
             # TODO: probably extract into eval function doing everything here
-            logger.info("PPL Eval:")
-            ppl_metrics = eval_loop(ppl_eval_dataloader)
-            ppl_metrics = {f"eval_{k}": v for k, v in ppl_metrics.items()}
-            utils.log(ppl_metrics, step=step + 1)
+            if ppl_eval_dataloader is not None:
+                logger.info("PPL Eval:")
+                ppl_metrics = eval_loop(ppl_eval_dataloader)
+                ppl_metrics = {f"eval_{k}": v for k, v in ppl_metrics.items()}
+                utils.log(ppl_metrics, step=step + 1)
 
             if not args.skip_lm_eval:
-                original_vocab = tokenizer_student_original.get_vocab()
-
                 predicted_embeddings = jpredict_embeddings(state.params)
                 model_params_with_embeddings = param.assign_embeddings(
                     jmaterialize_lora(
@@ -1140,15 +1292,14 @@ def my_app(args: DictConfig) -> None:
 
                 def jaxlm_score_fn(model_fn, params, model_args, *pargs):
                     (input_ids,) = model_args
-                    if args.add_expanded_input_ids:
-                        expanded_input_ids = utils.expand_input_ids(
+                    if args.expand_input_ids:
+                        expanded_input_ids = utils.np_expand_input_ids(
                             input_ids,
-                            tokenizer=target_tokenizer,
-                            original_vocab=original_vocab,
-                            use_heuristic=True,
+                            expand_input_ids_dict,
                         )
                     else:
                         expanded_input_ids = None
+
                     return jaxlm_inner_score_fn(
                         model_fn,
                         params,
@@ -1165,7 +1316,7 @@ def my_app(args: DictConfig) -> None:
                     logit_mask=state.logit_mask_new == 0,
                     output=output_dir / f"step_{step + 1}" / "lm_eval",
                     jaxlm_kwargs={"score_fn": jaxlm_score_fn},
-                    **OmegaConf.to_object(args.eval),
+                    **asdict(args.eval),
                 )
                 state.params["model"] = jdematerialize_lora(
                     param.unassign_embeddings(post_eval_params_buffer, student_config),
@@ -1238,4 +1389,4 @@ if __name__ == "__main__":
         True  # careful about this, required for lm_eval
     )
 
-    my_app()
+    main(parse_args.parse_args(CrossTokenizerDistillArgs))

@@ -16,7 +16,7 @@ from tqdm.auto import tqdm as raw_tqdm
 from transformers import AutoTokenizer
 
 import wandb
-from tokenkit import constants
+from tokenkit import constants, model_kinds
 from tokenkit.byteify import ByteifyTokenizer, load_byteify_tokenizer
 
 tqdm = partial(raw_tqdm, dynamic_ncols=True, disable=jax.process_index() != 0)
@@ -70,50 +70,123 @@ def get_space_mask(tokenizer):
     return space_mask
 
 
-def expand_input_ids(
-    input_ids_new,
-    tokenizer,
-    original_vocab,
-    use_heuristic=False,
+def get_expand_input_ids_matrix(
+    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
+):
+    expansion_data = []
+    expansion_indices = []
+
+    vocab = tokenizer.get_vocab()
+
+    for key, value in expand_input_ids_vocab.items():
+        if key in vocab:
+            indices = [vocab[key] + 1]
+        else:
+            indices = [
+                x + 1 for x in tokenizer.convert_tokens_to_ids(tokenizer.backend_tokenize(key))
+            ][::-1][:max_length]
+        while len(indices) < max_length:
+            indices.append(0)
+
+        expansion_data.append(1 + value)
+        expansion_indices.append(indices)
+
+    expansion_data.insert(0, -1)
+    expansion_indices.insert(0, [0] * max_length)
+
+    return (
+        np.array(expansion_data, dtype=np.int32),
+        np.array(expansion_indices, dtype=np.int32),
+    )
+
+def get_expand_input_ids_dict(
+    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
+):
+    expansion_data, expansion_indices = get_expand_input_ids_matrix(tokenizer, expand_input_ids_vocab, max_length)
+
+    return ({
+        tuple(i for i in indices if i != 0): data for indices, data in zip(expansion_indices, expansion_data)
+    }, set(tokenizer.all_special_ids))
+
+def np_expand_input_ids(
+    input_ids,
+    expand_input_ids_dict,
+    last_only=False,
     maxlen=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
 ):
-    expanded_input_ids = np.zeros_like(input_ids_new)
+    expanded_input_ids = np.zeros_like(input_ids)
 
-    for example_index in range(len(input_ids_new)):
-        tokens_new = tokenizer.convert_ids_to_tokens(input_ids_new[example_index])
+    for example_idx in range(len(input_ids)):
+        last_maxlen_ids = []
 
-        if use_heuristic:
-            # use a heuristic for pretokenization with 100% recall to narrow down possible candidates
-            starts_with_space = [
-                token == tokenizer.pad_token or (len(token) > 0 and token[0] == "Ġ")
-                for token in tokens_new
-            ]
-        else:
-            starts_with_space = None
+        for i in range(len(input_ids[example_idx])):
+            last_maxlen_ids.insert(0, input_ids[example_idx][i] + 1)
+            if len(last_maxlen_ids) > maxlen:
+                last_maxlen_ids.pop()
 
-        for token_idx in range(len(tokens_new)):
-            expanded_token_id = None
+            if last_only and i < len(input_ids[example_idx]) - 1:
+                continue
 
-            if use_heuristic:
-                prefix_start = token_idx
-
-                while (
-                    prefix_start > 0
-                    and (maxlen is None or token_idx + 1 - prefix_start < maxlen)
-                    and not starts_with_space[prefix_start]
-                ):
-                    prefix_start -= 1
+            if last_maxlen_ids[0] in expand_input_ids_dict[1]:
+                expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][(last_maxlen_ids[0],)] - 1
             else:
-                prefix_start = 0
+                found = False
+                last_maxlen_up_to = len(last_maxlen_ids)
 
-            for prefix_idx in range(prefix_start, token_idx + 1):
-                expanded_token_id = original_vocab.get(
-                    "".join(tokens_new[prefix_idx : token_idx + 1])
-                )
-                if expanded_token_id is not None:
-                    break
+                while not found and last_maxlen_up_to > 0:
+                    try:
+                        expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][tuple(last_maxlen_ids[:last_maxlen_up_to])] - 1
+                        found = True
+                    except KeyError:
+                        last_maxlen_up_to -= 1
 
-            expanded_input_ids[example_index, token_idx] = expanded_token_id
+    return expanded_input_ids
+
+
+def jax_expand_input_ids(
+    input_ids,
+    expand_input_ids_matrix,
+    last_only=False,
+    maxlen=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
+):
+    @partial(jax.jit, static_argnums=(1,))
+    @partial(jax.vmap, in_axes=(0, None))
+    def moving_window(a, size: int):
+        padded_a = jnp.pad(a, ((0, size - 1),), mode="constant", constant_values=0)
+        starts = jnp.arange(len(a))
+        return jax.vmap(
+            lambda start: jax.lax.dynamic_slice(padded_a, (start,), (size,))
+        )(starts)
+
+    input_ids_window = moving_window(input_ids[:, ::-1], maxlen) + 1
+    input_ids_window_repeated = jnp.tril(
+        jnp.tile(
+            input_ids_window[:, :, None],
+            (1, 1, maxlen, 1),
+        )
+    )[:, ::-1, ::-1, :]
+
+    if last_only:
+        input_ids_window_repeated = input_ids_window_repeated[:, -1:, :, :]
+
+    def inner_fn(lookup_tokens):
+        return (
+            (expand_input_ids_matrix[1] == lookup_tokens[None, :]).all(axis=-1).argmax()
+        )
+
+    expanded_indices = jax.vmap(inner_fn)(
+        input_ids_window_repeated.reshape(-1, maxlen)
+    ).reshape(input_ids_window_repeated.shape[:-1])
+    expanded_input_ids = (
+        expand_input_ids_matrix[0][
+            jnp.take_along_axis(
+                expanded_indices,
+                (expanded_indices > 0).argmax(-1, keepdims=True),
+                axis=-1,
+            )[:, :, 0]
+        ]
+        - 1
+    )
 
     return expanded_input_ids
 
@@ -134,6 +207,7 @@ def fvt(
     diff_embeddings = []
 
     stats = {
+        "special_token_exact_match": 0,
         "exact_match": 0,
         "averaged": 0,
         "fallback": 0,
@@ -142,12 +216,26 @@ def fvt(
     source_mean = source_embeddings.mean(0)
     source_std = source_embeddings.std(0)
 
+    one_to_one_special_tokens_map = {}
+    for k in model_kinds.BaseModelKind.SPECIAL_KEYS:
+        v1 = source_tokenizer.model_kind_cls.replacements[k]
+        v2 = target_tokenizer.model_kind_cls.replacements[k]
+
+        if v1 is not None and v2 is not None:
+            one_to_one_special_tokens_map[v2[0]] = v1[0]
+            logger.info(f"Copying special token {v1[0]} -> {v2[0]}")
+        elif v2 is not None:
+            logger.warning(f"Special token {k} has no replacements in source tokenizer: {v1}. Not copying special token embedding.")
+
     for i in tqdm(
         range(len(target_tokenizer)), desc="Applying FVT..", disable=not verbose
     ):
         token = target_tokenizer.convert_ids_to_tokens(i)
 
-        if (
+        if token in one_to_one_special_tokens_map:
+            stats["special_token_exact_match"] += 1
+            original_to_new_indices[i] = source_vocab[one_to_one_special_tokens_map[token]]
+        elif (
             token in source_vocab
             and source_vocab[token] < len(source_embeddings)
             and allow_exact_match
@@ -196,6 +284,7 @@ def fvt(
     logger.info(f"FVT exact match: {stats['exact_match']}")
     logger.info(f"FVT averaged: {stats['averaged']}")
     logger.info(f"FVT fallback: {stats['fallback']}")
+    logger.info(f"FVT special token exact match: {stats['special_token_exact_match']}")
 
     diff_indices = np.array(diff_indices, dtype=int)
     diff_embeddings = np.array(diff_embeddings, dtype=np.float32)
@@ -227,6 +316,14 @@ def label_by_prefix(pytree, label_maps, default=None):
                 labels[k] = default
 
     return traverse_util.unflatten_dict(labels)
+
+
+def remove_none(pytree):
+    flat_pytree = traverse_util.flatten_dict(pytree)
+    for k in flat_pytree:
+        if flat_pytree[k] is None:
+            del flat_pytree[k]
+    return traverse_util.unflatten_dict(flat_pytree)
 
 
 def get_n_pad(n, pad_to_multiple_of):
@@ -351,9 +448,8 @@ def preprocess_prompt(prompt, chat_template_mode):
 
     return prompt
 
-
 def encode_prompt(prompt, tokenizer, max_length=None):
-    tokens = []
+    token_ids = []
     regular_token_indices = []
 
     if max_length is not None:
@@ -363,19 +459,17 @@ def encode_prompt(prompt, tokenizer, max_length=None):
 
     def process_chunk(chunk):
         if chunk in tokenizer.added_tokens_encoder:
-            tokens.append(tokenizer.model_kind_cls.byte_fallback_fn(chunk))
+            token_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.model_kind_cls.byte_fallback_fn(chunk)))
             regular_token_indices.append(-1)
         elif chunk in tokenizer.model_kind_cls.replacements:
             if tokenizer.model_kind_cls.replacements[chunk] is not None:
-                tokens.extend(tokenizer.model_kind_cls.replacements[chunk])
+                token_ids.extend(tokenizer.convert_tokens_to_ids(tokenizer.model_kind_cls.replacements[chunk]))
                 regular_token_indices.extend(
                     [-1] * len(tokenizer.model_kind_cls.replacements[chunk])
                 )
         else:
-            chunk_tokens = tokenizer.convert_ids_to_tokens(
-                tokenizer(chunk, add_special_tokens=False)["input_ids"]
-            )
-            tokens.extend(chunk_tokens)
+            chunk_token_ids = tokenizer(chunk, add_special_tokens=False)["input_ids"]
+            token_ids.extend(chunk_token_ids)
 
             try:
                 regular_token_start = next(
@@ -385,7 +479,7 @@ def encode_prompt(prompt, tokenizer, max_length=None):
                 regular_token_start = -1
 
             regular_token_indices.extend(
-                [regular_token_start + 1 + i for i in range(len(chunk_tokens))]
+                [regular_token_start + 1 + i for i in range(len(chunk_token_ids))]
             )
 
     start_i = 0
@@ -423,8 +517,8 @@ def encode_prompt(prompt, tokenizer, max_length=None):
             start_i = i + len(key)
             i = start_i
 
-            if max_length is not None and len(tokens) >= max_length:
-                return tokens[:max_length], regular_token_indices[:max_length]
+            if max_length is not None and len(token_ids) >= max_length:
+                return token_ids[:max_length], regular_token_indices[:max_length]
         else:
             i += 1
 
@@ -433,9 +527,9 @@ def encode_prompt(prompt, tokenizer, max_length=None):
         process_chunk(chunk)
 
     if max_length is not None:
-        return tokens[:max_length], regular_token_indices[:max_length]
+        return token_ids[:max_length], regular_token_indices[:max_length]
     else:
-        return tokens, regular_token_indices
+        return token_ids, regular_token_indices
 
 
 def make_hashable(obj):
@@ -569,3 +663,16 @@ def test_encode_prompt(tokenizer_name):
 
     # apply_chat_template may inject an (undesired) system prompt, so the best we can do is to check the suffix (and skip first token since it may be bos)
     assert " ".join(comparison_tokens).endswith(" ".join(tokens[1:]))
+
+
+def test_expand_input_ids():
+    tokenizer = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2")
+    byte_tokenizer = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2:conversion=byte")
+
+    expand_vocab = tokenizer.get_vocab()
+
+    byte_input_ids = np.array([byte_tokenizer.encode("Hello, world! How are you today?")])
+    expanded_input_ids_np = np_expand_input_ids(byte_input_ids, get_expand_input_ids_dict(byte_tokenizer, expand_vocab))
+    expanded_input_ids_jax = jax_expand_input_ids(byte_input_ids, get_expand_input_ids_matrix(byte_tokenizer, expand_vocab))
+
+    assert np.all(expanded_input_ids_np == expanded_input_ids_jax)

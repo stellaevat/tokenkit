@@ -31,7 +31,7 @@ def is_gcs_path(path):
 def parse_gcs_path(gcs_path):
     path_parts = gcs_path[len("gs://") :].split("/", 1)
     bucket_name = path_parts[0]
-    blob_name = path_parts[1] if len(path_parts) > 1 else ""
+    blob_name = path_parts[1].rstrip("/") if len(path_parts) > 1 else ""
     return bucket_name, blob_name
 
 

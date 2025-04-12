@@ -994,19 +994,25 @@ def main(args: CrossTokenizerDistillArgs):
             (loss, (scalar_report, loss_ema_stats)), grad = grad_fn(
                 state.params, trainable_params
             )
-        elif args.multitask_aggregation_fn == "approx_gradmag":
+        elif args.multitask_aggregation_fn in {"approx_gradmag", "approx_gradmag_preserve_mag"}:
             jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=1)
             (last_layer_grads, _) = jac_fn(
                 state.params, last_layer_trainable_params, trainable_params
             )
             approx_grad_norm = multitask.compute_global_grad_norm(last_layer_grads)
-            approx_loss_weights = multitask.compute_inv_global_grad_norm(last_layer_grads)
-            last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0), multitask.gradmag(last_layer_grads))
+            # stop grad is not necessary here since the var is defined outside compute_loss_weighted, but added for clarity
+            approx_loss_weights = jax.lax.stop_gradient(multitask.compute_inv_global_grad_norm(last_layer_grads))
+
+            if args.multitask_aggregation_fn == "approx_gradmag_preserve_mag":
+                denominator = jnp.sum(approx_loss_weights)
+            else:
+                denominator = 1.0
+
+            last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0) / denominator, multitask.gradmag(last_layer_grads))
 
             def compute_loss_weighted(*pargs):
                 loss_values, (scalar_report, loss_ema_stats) = compute_loss(*pargs)
-                # stop grad is not necessary here since the var is defined outside the scope, but added for clarity
-                return jnp.sum(loss_values * jax.lax.stop_gradient(approx_loss_weights)), (
+                return jnp.sum(loss_values * approx_loss_weights) / denominator, (
                     scalar_report,
                     loss_ema_stats,
                 )

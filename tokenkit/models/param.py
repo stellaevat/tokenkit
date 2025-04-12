@@ -193,6 +193,23 @@ def set_num_layers(config, num_layers):
         raise ValueError("Could not determine number of layers from config")
 
 
+def get_layer_n_mask(model_params, config, layer_idx):
+    if layer_idx < 0:
+        layer_idx = get_num_layers(config) + layer_idx
+
+    flat_params = traverse_util.flatten_dict(model_params)
+    mask = {}
+    subpath = f"{get_layer_path(config.model_type)}.{layer_idx}"
+
+    for key in flat_params.keys():
+        if subpath in ".".join(key):
+            mask[key] = True
+        else:
+            mask[key] = False
+
+    return traverse_util.unflatten_dict(mask)
+
+
 def strip_layers(model_params, config, n_keep=1):
     for layer_idx in range(n_keep, get_num_layers(config)):
         model_params, _ = pop(

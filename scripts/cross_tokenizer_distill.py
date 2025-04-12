@@ -743,10 +743,10 @@ def main(args: CrossTokenizerDistillArgs):
         return inputs_embeds
 
     def train_step(state, batch, global_batch):
-        def compute_loss(trainable_params, non_trainable_params, aggregate_losses=True):
+        def compute_loss(non_trainable_params, *trainable_params):
             params = jax.tree.map(
-                lambda x, y: x if y is None else y,
-                trainable_params,
+                lambda *args: next(x for x in args if x is not None),
+                *trainable_params,
                 non_trainable_params,
                 is_leaf=lambda x: x is None,
             )
@@ -972,33 +972,64 @@ def main(args: CrossTokenizerDistillArgs):
                 else:
                     loss_values = loss_values.at[loss_idx].set(weight * current_loss)
 
-            if aggregate_losses:
-                return jnp.sum(loss_values), (
-                    scalar_report,
-                    loss_ema_stats,
-                    loss_values,
-                )
-            else:
-                return loss_values, (scalar_report, loss_ema_stats, loss_values)
+            return loss_values, (scalar_report, loss_ema_stats)
 
         trainable_params = jax.tree.map(
             lambda x, m: x if m else None, state.params, train_mask
         )
-        non_trainable_params = jax.tree.map(
-            lambda x, m: x if not m else None, state.params, train_mask
+        last_layer_trainable_params = jax.tree.map(
+            lambda x, m1, m2: x if m1 and m2 else None,
+            state.params,
+            train_mask,
+            param.get_layer_n_mask(state.params, student_config, -1),
         )
 
         if args.multitask_aggregation_fn is None:
-            grad_fn = jax.value_and_grad(compute_loss, has_aux=True)
-            (loss, (scalar_report, loss_ema_stats, _)), grad = grad_fn(
-                trainable_params, non_trainable_params
+
+            def compute_loss_avg(*args):
+                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
+                return jnp.mean(loss_values), (scalar_report, loss_ema_stats)
+
+            grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=(1,))
+            (loss, (scalar_report, loss_ema_stats)), grad = grad_fn(
+                state.params, trainable_params
+            )
+        elif args.multitask_aggregation_fn == "approx_gradmag":
+            jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=(1,))
+            (last_layer_grads, _) = jac_fn(
+                state.params, last_layer_trainable_params, trainable_params
+            )
+            loss_weights = multitask.compute_inv_global_grad_norm(last_layer_grads)
+            last_layer_grad = multitask.gradmag(last_layer_grads, loss_weights)
+
+            def compute_loss_weighted(*args):
+                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
+                return jnp.sum(loss_values * loss_weights), (
+                    scalar_report,
+                    loss_ema_stats,
+                )
+
+            grad_fn = jax.value_and_grad(
+                compute_loss_weighted, has_aux=True, argnums=(2,)
+            )
+            (loss, (scalar_report, loss_ema_stats)), non_last_layer_grad = grad_fn(
+                state.params, last_layer_trainable_params, trainable_params
+            )
+            grad = jax.tree.map(
+                lambda x, y: x if y is None else y,
+                last_layer_grad,
+                non_last_layer_grad,
+                is_leaf=lambda x: x is None,
             )
         else:
-            jac_fn = jax.jacrev(
-                partial(compute_loss, aggregate_losses=False), has_aux=True
-            )
+
+            def compute_loss_with_aux_value(*args):
+                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
+                return loss_values, (scalar_report, loss_ema_stats, loss_values)
+
+            jac_fn = jax.jacrev(compute_loss_with_aux_value, has_aux=True, argnums=(1,))
             (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(
-                trainable_params, non_trainable_params
+                state.params, trainable_params
             )
 
             global_grad_norms_before_agg = multitask.compute_global_grad_norm(grads)
@@ -1025,7 +1056,6 @@ def main(args: CrossTokenizerDistillArgs):
             global_grad_norms_after_agg = multitask.compute_global_grad_norm(grads)
 
             for loss_idx, loss in enumerate(args.losses):
-                scalar_report[f"loss/{loss}_loss_value"] = loss_values[loss_idx]
                 scalar_report[f"loss/{loss}_global_grad_norm_before_agg"] = (
                     global_grad_norms_before_agg[loss_idx]
                 )
@@ -1167,7 +1197,11 @@ def main(args: CrossTokenizerDistillArgs):
     upload_executor = None
     upload_name = args.name + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
 
-    grad_acc_steps = args.optimizer.grad_acc_steps if args.optimizer.grad_acc_steps is not None else 1
+    grad_acc_steps = (
+        args.optimizer.grad_acc_steps
+        if args.optimizer.grad_acc_steps is not None
+        else 1
+    )
     assert args.data.batch_size % grad_acc_steps == 0
     local_batch_size = args.data.batch_size // grad_acc_steps
 

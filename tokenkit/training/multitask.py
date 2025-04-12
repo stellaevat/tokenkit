@@ -141,3 +141,14 @@ def compute_global_grad_norm(task_grads: Any) -> jnp.ndarray:
         )
     )
     return global_grad_norms
+
+
+def compute_inv_global_grad_norm(task_grads: Any, epsilon: float = 1e-8) -> jnp.ndarray:
+    """
+    Computes the inverse of the global gradient norm for a pytree of task gradients.
+
+    Args:
+        task_grads: A pytree containing gradients where the first dimension of each
+    """
+
+    return 1 / (compute_global_grad_norm(task_grads) + epsilon)

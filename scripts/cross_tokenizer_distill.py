@@ -986,8 +986,8 @@ def main(args: CrossTokenizerDistillArgs):
 
         if args.multitask_aggregation_fn is None:
 
-            def compute_loss_avg(*args):
-                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
+            def compute_loss_avg(*pargs):
+                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*pargs)
                 return jnp.mean(loss_values), (scalar_report, loss_ema_stats)
 
             grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=1)
@@ -1003,9 +1003,10 @@ def main(args: CrossTokenizerDistillArgs):
             approx_loss_weights = multitask.compute_inv_global_grad_norm(last_layer_grads)
             last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0), multitask.gradmag(last_layer_grads))
 
-            def compute_loss_weighted(*args):
-                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
-                return jnp.sum(loss_values * approx_loss_weights), (
+            def compute_loss_weighted(*pargs):
+                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*pargs)
+                # stop grad is not necessary here since the var is defined outside the scope, but added for clarity
+                return jnp.sum(loss_values * jax.lax.stop_gradient(approx_loss_weights)), (
                     scalar_report,
                     loss_ema_stats,
                 )
@@ -1017,9 +1018,9 @@ def main(args: CrossTokenizerDistillArgs):
                 state.params, last_layer_trainable_params, trainable_params
             )
 
-            for loss_idx, loss in enumerate(args.losses):
-                scalar_report[f"loss/{loss}_approx_grad_norm"] = approx_grad_norm[loss_idx]
-                scalar_report[f"loss/{loss}_approx_loss_weight"] = approx_loss_weights[loss_idx]
+            for loss_idx, loss_name in enumerate(args.losses):
+                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[loss_idx]
+                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = approx_loss_weights[loss_idx]
 
             grad = jax.tree.map(
                 lambda x, y: x if x is not None else y,
@@ -1061,11 +1062,11 @@ def main(args: CrossTokenizerDistillArgs):
 
             global_grad_norms_after_agg = multitask.compute_global_grad_norm(grads)
 
-            for loss_idx, loss in enumerate(args.losses):
-                scalar_report[f"loss/{loss}_global_grad_norm_before_agg"] = (
+            for loss_idx, loss_name in enumerate(args.losses):
+                scalar_report[f"loss/{loss_name}_global_grad_norm_before_agg"] = (
                     global_grad_norms_before_agg[loss_idx]
                 )
-                scalar_report[f"loss/{loss}_global_grad_norm_after_agg"] = (
+                scalar_report[f"loss/{loss_name}_global_grad_norm_after_agg"] = (
                     global_grad_norms_after_agg[loss_idx]
                 )
 

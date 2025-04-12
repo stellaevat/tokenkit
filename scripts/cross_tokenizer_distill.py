@@ -990,12 +990,12 @@ def main(args: CrossTokenizerDistillArgs):
                 loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
                 return jnp.mean(loss_values), (scalar_report, loss_ema_stats)
 
-            grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=(1,))
+            grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=1)
             (loss, (scalar_report, loss_ema_stats)), grad = grad_fn(
                 state.params, trainable_params
             )
         elif args.multitask_aggregation_fn == "approx_gradmag":
-            jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=(1,))
+            jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=1)
             (last_layer_grads, _) = jac_fn(
                 state.params, last_layer_trainable_params, trainable_params
             )
@@ -1010,7 +1010,7 @@ def main(args: CrossTokenizerDistillArgs):
                 )
 
             grad_fn = jax.value_and_grad(
-                compute_loss_weighted, has_aux=True, argnums=(2,)
+                compute_loss_weighted, has_aux=True, argnums=2
             )
             (loss, (scalar_report, loss_ema_stats)), non_last_layer_grad = grad_fn(
                 state.params, last_layer_trainable_params, trainable_params
@@ -1027,7 +1027,7 @@ def main(args: CrossTokenizerDistillArgs):
                 loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
                 return loss_values, (scalar_report, loss_ema_stats, loss_values)
 
-            jac_fn = jax.jacrev(compute_loss_with_aux_value, has_aux=True, argnums=(1,))
+            jac_fn = jax.jacrev(compute_loss_with_aux_value, has_aux=True, argnums=1)
             (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(
                 state.params, trainable_params
             )

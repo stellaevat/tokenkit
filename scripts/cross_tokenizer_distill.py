@@ -999,12 +999,17 @@ def main(args: CrossTokenizerDistillArgs):
             (last_layer_grads, _) = jac_fn(
                 state.params, last_layer_trainable_params, trainable_params
             )
-            loss_weights = multitask.compute_inv_global_grad_norm(last_layer_grads)
-            last_layer_grad = multitask.gradmag(last_layer_grads, loss_weights)
+            approx_grad_norm = multitask.compute_global_grad_norm(last_layer_grads)
+            approx_loss_weights = multitask.compute_inv_global_grad_norm(last_layer_grads)
+            last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0), multitask.gradmag(last_layer_grads))
+
+            for loss_idx, loss in enumerate(args.losses):
+                scalar_report[f"loss/{loss}_approx_grad_norm"] = approx_grad_norm[loss_idx]
+                scalar_report[f"loss/{loss}_approx_loss_weight"] = approx_loss_weights[loss_idx]
 
             def compute_loss_weighted(*args):
                 loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
-                return jnp.sum(loss_values * loss_weights), (
+                return jnp.sum(loss_values * approx_loss_weights), (
                     scalar_report,
                     loss_ema_stats,
                 )
@@ -1016,7 +1021,7 @@ def main(args: CrossTokenizerDistillArgs):
                 state.params, last_layer_trainable_params, trainable_params
             )
             grad = jax.tree.map(
-                lambda x, y: x if y is None else y,
+                lambda x, y: x if x is not None else y,
                 last_layer_grad,
                 non_last_layer_grad,
                 is_leaf=lambda x: x is None,

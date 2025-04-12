@@ -108,10 +108,16 @@ def parse_args(cls):
                     current = getattr(current, k)
 
             if isinstance(current, list):
+                if int(key[-1]) >= len(current):
+                    raise ValueError(f"Invalid key: {key[-1]}")
                 current[int(key[-1])] = value
             elif isinstance(current, dict):
+                if key[-1] not in current:
+                    raise ValueError(f"Invalid key: {key[-1]}")
                 current[key[-1]] = value
             else:
+                if not hasattr(current, key[-1]):
+                    raise ValueError(f"Invalid key: {key[-1]}")
                 setattr(current, key[-1], value)
 
     return restore_dataclasses(args, cls)

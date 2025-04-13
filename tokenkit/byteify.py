@@ -202,12 +202,15 @@ class ByteifyTokenizer:
     def encode(self, *args, **kwargs):
         return self.tokenizer.encode(*args, **kwargs)
 
-    def backend_tokenize(self, pretoken: str) -> List[str]:
-        # this is not ideal: needs the pretoken to be a decodable string
-        # and needs hacks for handling prefix spaces correctly
-
+    def backend_tokenize(self, pretoken: str, unsafe=False) -> List[str]:
         if len(pretoken) == 0:
             return []
+
+        if unsafe:
+            return [x.value for x in self.tokenizer.backend_tokenizer.model.tokenize(pretoken)]
+
+        # this is not ideal: needs the pretoken to be a decodable string
+        # and needs hacks for handling prefix spaces correctly
 
         pretoken_bytes = bytes([CHARS_TO_BYTES[c] for c in pretoken])
         pretoken_string = pretoken_bytes.decode("utf-8")

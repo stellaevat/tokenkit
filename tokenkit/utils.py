@@ -95,7 +95,8 @@ def get_expand_input_ids_matrix(
             indices = [vocab[key] + 1]
         else:
             indices = [
-                x + 1 for x in tokenizer.convert_tokens_to_ids(tokenizer.backend_tokenize(key))
+                # unsafe=True is OK because `tokenizer` must be byte-converted via conversion=byte, and thus has the correct vocab
+                x + 1 for x in tokenizer.convert_tokens_to_ids(tokenizer.backend_tokenize(key, unsafe=True))
             ][::-1][:max_length]
         while len(indices) < max_length:
             indices.append(0)

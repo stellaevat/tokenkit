@@ -148,7 +148,7 @@ class ByteifyTokenizer:
         if isinstance(ids, int):
             return self.inv_vocab[ids]
         else:
-            return [self.inv_vocab[id] for id in ids]
+            return [self.inv_vocab[int(id)] for id in ids]
 
     def convert_tokens_to_ids(
         self, tokens: Union[str, List[str]]

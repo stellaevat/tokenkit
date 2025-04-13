@@ -147,8 +147,8 @@ class Generator:
                     tokenizer.encode(" " + stop_sequence_str, add_special_tokens=False)
                 )
 
-        if until is None or tokenizer.eos_token not in until:
-            self.until_tokens.append([tokenizer.eos_token_id])
+        if (self.tokenizer.eos_token_id,) not in [tuple(x) for x in self.until_tokens]:
+            self.until_tokens.append([self.tokenizer.eos_token_id])
 
         if (
             until is None

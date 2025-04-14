@@ -93,6 +93,7 @@ To evaluate pretrained byte-level models, you'll need to pass embeddings to expa
 python3 scripts/eval.py \
   +main.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-Byte\' \
   +main.tokenizer_name=\'benjamin/Gemma2-2B-IT-Byte:source=Gemma2:conversion=prebyteified\' \
+  expand_input_ids=true \
   +expand.pretrained_model_name_or_path=\'benjamin/gemma-2-2b-it-flax\' \
   +expand.tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2\' \
   eval.tasks=[mmlu]

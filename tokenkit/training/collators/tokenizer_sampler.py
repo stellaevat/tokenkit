@@ -4,7 +4,7 @@ import tokenizers
 from tokenizers import models, pre_tokenizers, decoders, normalizers, Tokenizer
 import copy
 
-import rust_utils
+#import rust_utils
 
 from tokenkit import utils, constants, align
 from tokenkit.byteify import ByteifyTokenizer

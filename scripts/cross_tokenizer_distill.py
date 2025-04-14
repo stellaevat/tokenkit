@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BaselineArgs:
     divergence: str = "srkl"
-    dskd_use_causal_attention_mask: bool = False
     adaptive_kl_alpha: float = 0.5
     skew_lambda: float = 0.1
     teacher_temperature: float = 1.0
@@ -842,7 +841,6 @@ def main(args: CrossTokenizerDistillArgs):
             ].mean()
 
             loss_args = losses.LossArgs(
-                state=state,
                 params=params,
                 batch=batch,
                 global_batch=global_batch,
@@ -860,6 +858,10 @@ def main(args: CrossTokenizerDistillArgs):
                 student_logits=student_logits,
                 predicted_embeddings=predicted_embeddings,
                 scalar_report=scalar_report,
+                space_mask_teacher=state.space_mask_teacher,
+                space_mask_new=state.space_mask_new,
+                logit_mask_teacher=state.logit_mask_teacher,
+                logit_mask_new=state.logit_mask_new,
             )
 
             loss_values = jnp.zeros(len(args.losses), dtype=jnp.float32)

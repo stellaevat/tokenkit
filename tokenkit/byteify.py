@@ -202,11 +202,13 @@ class ByteifyTokenizer:
     def encode(self, *args, **kwargs):
         return self.tokenizer.encode(*args, **kwargs)
 
-    def backend_tokenize(self, pretoken: str, unsafe=False) -> List[str]:
+    def backend_tokenize(self, pretoken: str, unsafe: bool | str = False) -> List[str]:
         if len(pretoken) == 0:
             return []
 
-        if unsafe:
+        is_unsafe = unsafe is True or (unsafe == "auto" and isinstance(self.tokenizer.backend_tokenizer.pre_tokenizer, tokenizers.pre_tokenizers.ByteLevel))
+
+        if is_unsafe:
             return [x.value for x in self.tokenizer.backend_tokenizer.model.tokenize(pretoken)]
 
         # this is not ideal: needs the pretoken to be a decodable string

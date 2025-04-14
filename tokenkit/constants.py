@@ -260,3 +260,5 @@ CHARS_TO_BYTES = {
 }
 BYTES_TO_CHARS = {v: k for k, v in CHARS_TO_BYTES.items()}
 MAX_CHARS_PER_TOKEN = 16
+# for hn training
+DEFAULT_SPLIT_REGEX = r"'s|'t|'re|'ve|'m|'ll|'d| ?[\p{L}\p{M}]+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"

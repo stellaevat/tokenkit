@@ -105,7 +105,7 @@ class HFDataset:
                     stream = stream.shuffle(seed=seed)
 
             self.dset_streams[config["lang_code"]] = stream.map(
-                partial(process_example, lang_code=config["lang_code"]), **process_kwargs, remove_columns=stream.column_names
+                partial(process_example, lang_code=config["lang_code"]), **process_kwargs, remove_columns=stream.column_names if not streaming else None
             )
 
             if "p" in config:

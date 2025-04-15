@@ -515,7 +515,7 @@ def main(args: TrainZettHnArgs):
         else:
             source_embeddings = state.params["embeddings"]
 
-        def compute_loss(non_trainable_params, *trainable_params):
+        def compute_loss(non_trainable_params, *trainable_params, epsilon=1e-8):
             params = jax.tree.map(
                 lambda *args: next(x for x in args if x is not None),
                 *trainable_params,
@@ -640,8 +640,8 @@ def main(args: TrainZettHnArgs):
                     # shape: [n_embeddings]
                     lexical_loss = (
                         lexical_loss.mean(axis=0)
-                        / (lexical_overlap_mask.mean() + utils.EPSILON)
-                        / jnp.linalg.norm(target_embeddings, axis=-1).mean(0)
+                        / (lexical_overlap_mask.mean() + epsilon)
+                        / (jnp.linalg.norm(target_embeddings, axis=-1).mean(0) + epsilon)
                     )
                     scalar_report["mean_lexical_overlap"] = lexical_overlap_mask.mean()
                     # shape: []

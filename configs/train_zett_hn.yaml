@@ -4,7 +4,7 @@ seed: 1234
 dtype: bfloat16
 pad_to_multiple_of: 128
 identity_steps: 0
-identity_lr: 3e-4
+identity_lr: 3.e-4
 warmup_steps: 10_000
 steps: 200_000
 train_embeddings: false

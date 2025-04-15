@@ -87,7 +87,6 @@ class CrossTokenizerDistillArgs:
     n_model_parallel: int = 8
     loss_weights: list[float] | None = None
     loss_schedules: list[str] | None = None
-    ema_alpha: float = 0.95
     multitask_aggregation_fn: str | None = None
     bce_temp: float = 100.0
     distill_chunk_sizes: list[int] = field(default_factory=lambda: [1])

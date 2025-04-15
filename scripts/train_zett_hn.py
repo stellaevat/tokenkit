@@ -101,9 +101,7 @@ class TrainZettHnArgs:
     n_data_parallel: int = 1
     n_model_parallel: int = 8
     loss_weights: list[float] | None = None
-    uncertainty_s_init: float = 0
     loss_schedules: list[str] | None = None
-    ema_alpha: float = 0.95
     multitask_aggregation_fn: str | None = None
     bce_temp: float = 100.0
     distill_chunk_sizes: list[int] = field(default_factory=lambda: [1])
@@ -691,7 +689,7 @@ def main(args: TrainZettHnArgs):
                 loss_values, scalar_report = compute_loss(*pargs)
                 return jnp.mean(loss_values), scalar_report
 
-            grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=0) # TODO: split into train/non train
+            grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=1)
             (loss, scalar_report), grad = grad_fn(
                 state.params, trainable_params
             )

@@ -5,6 +5,17 @@ from tokenkit.byteify import ByteifyTokenizer, load_byteify_tokenizer
 
 logger = logging.getLogger(__name__)
 
+def _count_leading_whitespace(tokens: list[str]) -> int:
+    # count the consecutive Ġ's at the start across tokens (e.g. ["ĠĠ", "Ġa", "b"] -> 3)
+    count = 0
+    for token in tokens:
+        for char in token:
+            if char == 'Ġ':
+                count += 1
+            else:
+                return count
+    return count
+
 def get_alignment_indices(
     tokens_teacher: list[str],
     tokens_student: list[str],
@@ -61,6 +72,17 @@ def get_alignment_indices(
     cum_lengths_student_dict = {}
 
     alignment_indices = []
+
+    student_leading_whitespace_count = _count_leading_whitespace(tokens_student)
+    teacher_leading_whitespace_count = _count_leading_whitespace(tokens_teacher)
+
+    while student_leading_whitespace_count > teacher_leading_whitespace_count:
+        tokens_teacher[0] = 'Ġ' + tokens_teacher[0]
+        teacher_leading_whitespace_count += 1
+
+    while teacher_leading_whitespace_count > student_leading_whitespace_count:
+        tokens_student[0] = 'Ġ' + tokens_student[0]
+        student_leading_whitespace_count += 1
 
     while i < len(tokens_teacher) or j < len(tokens_student):
         if i < len(tokens_teacher) and not attention_mask_teacher[i]:

@@ -20,7 +20,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 import time
 
 from tokenkit import utils, data, eval, parse_args
-from tokenkit.training import losses, opt, lr, collators
+from tokenkit.training import losses, opt, lr, collators, checkpoint
 from tokenkit.utils import tqdm
 from tokenkit.models import param, sharding
 from tokenkit.models.hypernet import Hypernet
@@ -101,7 +101,6 @@ class TrainZettHnArgs:
     n_data_parallel: int = 1
     n_model_parallel: int = 8
     loss_weights: list[float] | None = None
-    loss_weight_mode: str | None = None
     uncertainty_s_init: float = 0
     loss_schedules: list[str] | None = None
     ema_alpha: float = 0.95
@@ -132,7 +131,6 @@ class TrainZettHnArgs:
     identity_steps: int = 0
     identity_lr: float = 3e-4
     compat: bool = False
-    eval_with_consistent_whitespace: bool = True
 
 
 def get_last_index_per_column(matrix):
@@ -161,7 +159,7 @@ def predict_embeddings(
         use_extra = surface_forms >= n_vocab
         extra_ids = jnp.maximum(surface_forms - n_vocab, 0)
         embeddings_to_compose = jnp.where(
-            use_extra[..., None],
+            use_extra[..., None, None],
             jnp.take(extra_embeddings, extra_ids, axis=0),
             jnp.take(source_embeddings, main_ids, axis=0),
         )
@@ -399,10 +397,7 @@ def main(args: TrainZettHnArgs):
             # keep around a copy of the original embeddings for the teacher (condition could be tightened)
             params["original_embeddings"] = jnp.copy(params["embeddings"])
 
-        n_extra_embeddings = len(hn_tokenizer) - original_n_vocab
-        n_extra_embeddings = utils.get_n_pad(
-            n_extra_embeddings, args.pad_to_multiple_of
-        )
+        n_extra_embeddings = 256 # allocate space for 256 byte fallback embeddings 
         params["extra_embeddings"] = jax.random.normal(
             jax.random.PRNGKey(args.seed),
             (n_extra_embeddings, *embeddings.shape[1:]),
@@ -458,6 +453,7 @@ def main(args: TrainZettHnArgs):
     )
 
     utils.param_report(state.params, state.train_mask)
+    train_mask = jax.device_get(state.train_mask)
 
     def identity_train_step(state, batch):
         surface_forms = batch.pop("target_surface_forms")
@@ -470,7 +466,14 @@ def main(args: TrainZettHnArgs):
         else:
             source_embeddings = state.params["embeddings"]
 
-        def compute_loss(params):
+        def compute_loss(non_trainable_params, *trainable_params):
+            params = jax.tree.map(
+                lambda *args: next(x for x in args if x is not None),
+                *trainable_params,
+                non_trainable_params,
+                is_leaf=lambda x: x is None,
+            )
+
             predicted_embeddings = predict_embeddings(
                 state.apply_fn,
                 state.original_n_vocab,
@@ -488,8 +491,12 @@ def main(args: TrainZettHnArgs):
 
             return loss
 
-        grad_fn = jax.value_and_grad(compute_loss)
-        loss, grad = grad_fn(state.params)
+        trainable_params = jax.tree.map(
+            lambda x, m: x if m else None, state.params, train_mask
+        )
+
+        grad_fn = jax.value_and_grad(compute_loss, argnums=1)
+        loss, grad = grad_fn(state.params, trainable_params)
 
         new_state = state.apply_gradients(grads=grad)
 
@@ -508,7 +515,14 @@ def main(args: TrainZettHnArgs):
         else:
             source_embeddings = state.params["embeddings"]
 
-        def compute_loss(params):
+        def compute_loss(non_trainable_params, *trainable_params):
+            params = jax.tree.map(
+                lambda *args: next(x for x in args if x is not None),
+                *trainable_params,
+                non_trainable_params,
+                is_leaf=lambda x: x is None,
+            )
+
             scalar_report = {}
 
             (
@@ -667,6 +681,10 @@ def main(args: TrainZettHnArgs):
 
             return loss_values, scalar_report
 
+        trainable_params = jax.tree.map(
+            lambda x, m: x if m else None, state.params, train_mask
+        )
+
         if args.multitask_aggregation_fn is None:
 
             def compute_loss_avg(*pargs):
@@ -675,7 +693,7 @@ def main(args: TrainZettHnArgs):
 
             grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=0) # TODO: split into train/non train
             (loss, scalar_report), grad = grad_fn(
-                state.params
+                state.params, trainable_params
             )
         else:
             raise NotImplementedError()
@@ -690,111 +708,47 @@ def main(args: TrainZettHnArgs):
         return new_state, metrics
 
     def eval_step(state, batch):
-        return {}
-        # input_ids = batch.pop("input_ids")
-        # attention_mask = batch.pop("attention_mask")
-        # labels = batch.pop("labels")
-        # target_surface_forms = batch.pop("target_surface_forms")
-        # target_priors = batch.pop("target_priors")
-        # ids_to_embed = batch.pop("ids_to_embed")
-        # lang_index = batch.pop("lang_index")
+        target_surface_forms = batch["target_surface_forms"]
+        target_priors = batch["target_priors"]
 
-        # if args.train_embeddings:
-        #     source_embeddings = state.params["original_embeddings"]
-        # else:
-        #     source_embeddings = state.params["embeddings"]
+        if args.train_embeddings:
+            source_embeddings = state.params["original_embeddings"]
+        else:
+            source_embeddings = state.params["embeddings"]
 
-        # def compute_loss(params):
-        #     (
-        #         predicted_embeddings,
-        #         out,
-        #     ) = compute_embeddings_and_out(
-        #         params,
-        #         input_ids,
-        #         target_surface_forms,
-        #         target_surface_forms != hn_tokenizer.pad_token_id,
-        #         target_priors,
-        #         batch["mask"],
-        #         batch["special_indices"],
-        #         batch["special_indices_in_reference"],
-        #         source_embeddings=source_embeddings,
-        #         extra_embeddings=params["extra_embeddings"],
-        #         config=config,
-        #         original_n_vocab=state.original_n_vocab,
-        #         hypernet_fn=state.apply_fn,
-        #         model_fn=model,
-        #         temperature=args.temperature,
-        #     )
-        #     if args.loss_mode in {"distill_main_path", "distill_main_path_cover"}:
-        #         model.config.vocab_size = len(source_embeddings)
-        #         dargs = LossDistillationArgs(
-        #             teacher_model=model,
-        #             teacher_params=assign_embeddings(
-        #                 params["model"], source_embeddings, config
-        #             ),
-        #             original_n_vocab=state.original_n_vocab,
-        #             input_ids=batch["original_input_ids"],
-        #             attention_mask=batch["original_attention_mask"],
-        #             labels=batch["original_labels"],
-        #             alignment_matrix_a=batch["alignment_matrix_a"],
-        #             alignment_matrix_b=batch["alignment_matrix_b"],
-        #             alignment_matrix_a_for_latents=batch["alignment_matrix_a_for_latents"],
-        #             alignment_matrix_b_for_latents=batch["alignment_matrix_b_for_latents"],
-        #             space_mask_original=space_mask_original,
-        #             space_mask_new=batch["space_mask"],
-        #             temperature=args.temperature,
-        #             latents_to_align=args.latents_to_align,
-        #             latents_normalization=args.latents_normalization,
-        #             distill_chunk_sizes=args.distill_chunk_sizes,
-        #             main_loss_weight=args.main_loss_weight,
-        #             latent_loss_weight=args.latent_loss_weight,
-        #         )
-        #     else:
-        #         dargs = None
+        def compute_loss(params):
+            (
+                _,
+                student_out,
+            ) = compute_embeddings_and_out(
+                params,
+                batch["input_ids_new"],
+                target_surface_forms,
+                target_surface_forms != hn_tokenizer.pad_token_id,
+                target_priors,
+                batch["mask"],
+                batch["special_indices"],
+                batch["special_indices_in_reference"],
+                source_embeddings=source_embeddings,
+                extra_embeddings=params["extra_embeddings"],
+                config=student_config,
+                original_n_vocab=state.original_n_vocab,
+                hypernet_fn=state.apply_fn,
+                model=student_model,
+            )
 
-        #     loss, scalar_report = loss_fn(out, labels, attention_mask, args.loss_mode, config, dargs=dargs)
+            return losses.cross_entropy(
+                student_out.logits,
+                batch["input_ids_new"],
+                batch["loss_mask_new"],
+            )
 
-        #     # TODO (low priority): address tokens which are decomposed "incorrectly"?
-        #     lexical_overlap_mask = (
-        #         target_surface_forms[:, 1:] == hn_tokenizer.pad_token_id
-        #     ).all(axis=1)
-        #     target_embeddings = source_embeddings[target_surface_forms[:, 0]]
+        loss = compute_loss(state.params)
 
-        #     def distance_fn(x, y):
-        #         return jnp.square(x - y).sum(axis=-1)
-
-        #     # shape: [n_vocab, n_embeddings]
-        #     lexical_loss = (
-        #         distance_fn(predicted_embeddings, target_embeddings)
-        #         * lexical_overlap_mask[:, None]
-        #     )
-        #     # shape: [n_embeddings]
-        #     lexical_loss = (
-        #         lexical_loss.mean(axis=0)
-        #         / (lexical_overlap_mask.mean() + utils.EPSILON)
-        #         / jnp.linalg.norm(target_embeddings, axis=-1).mean(0)
-        #     )
-        #     # shape: []
-        #     lexical_loss = lexical_loss.mean()
-
-        #     loss = loss + lexical_loss * args.lexical_loss_weight
-        #     mean_lexical_overlap = lexical_overlap_mask.mean()
-
-        #     return loss, {
-        #         "lexical_loss": lexical_loss,
-        #         "mean_lexical_overlap": mean_lexical_overlap,
-        #         **scalar_report,
-        #     }
-
-        # loss, metrics = compute_loss(state.params)
-
-        # metrics = {
-        #     "loss": loss,
-        #     **metrics,
-        #     # TODO (low priority): implement gradient accumulation
-        #     "learning_rate": learning_rate_fn(state.step),
-        # }
-        # return metrics
+        metrics = {
+            "loss": loss,
+        }
+        return metrics
 
     initial_texts = [
         x["text"] for x in dataset.get_texts(args.collator.tokenizer_batch_size)
@@ -804,7 +758,7 @@ def main(args: TrainZettHnArgs):
         args.collator,
         batch_size=args.data.batch_size,
         initial_texts=initial_texts,  # TODO: impl !mix_languages
-        with_consistent_whitespace=True,
+        with_consistent_whitespace=False,
         with_alignments=True,
         original_tokenizer=original_tokenizer,
         space_mask_mode=args.space_mask_mode,
@@ -813,9 +767,8 @@ def main(args: TrainZettHnArgs):
     eval_tokenizers = []
 
     for targs in args.eval.tokenizers:
-        eval_tokenizer = load_byteify_tokenizer(targs.tokenizer)
+        eval_tokenizer = load_byteify_tokenizer(targs["tokenizer"])
         special_indices = np.array(eval_tokenizer.all_special_ids)
-        # TODO: check this, why do we need this?
         special_indices_in_reference = np.array(
             [
                 hn_tokenizer.convert_tokens_to_ids(token)
@@ -840,7 +793,7 @@ def main(args: TrainZettHnArgs):
                 "logit_mask": eval_logit_mask,
                 "special_indices": special_indices,
                 "special_indices_in_reference": special_indices_in_reference,
-                "name": targs.name,
+                "name": targs["name"],
             }
         )
 
@@ -859,7 +812,7 @@ def main(args: TrainZettHnArgs):
             identity_collator_args,
             tokenizer_name=hn_tokenizer.name_or_path,
             with_consistent_whitespace=False,
-        )  # would change vocab
+        )
 
         identity_train_dataloader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(
@@ -1046,8 +999,8 @@ def main(args: TrainZettHnArgs):
                         else state.params["embeddings"]
                     ),
                     state.params["extra_embeddings"],
-                    sharding.to_global_array(special_indices),
-                    sharding.to_global_array(special_indices_in_reference),
+                    sharding.to_global_array(eval_tokenizer["special_indices"]),
+                    sharding.to_global_array(eval_tokenizer["special_indices_in_reference"]),
                 )
                 model_params_with_embeddings = assign_embeddings(
                     state.params["model"], predicted_embeddings, student_config
@@ -1079,22 +1032,12 @@ def main(args: TrainZettHnArgs):
                 utils.log(lm_eval_metrics, step=step + 1)
 
         if (step + 1) % args.save_interval == 0 or (step == 0 and args.save_at_step_zero):
-
-            def to_host(state):
-                params_to_save = {
-                    "hypernet": state.params["hypernet"],
-                }
-
-                if args.train_embeddings:
-                    params_to_save["embeddings"] = state.params["embeddings"]
-
-                return params_to_save
-
-            params_to_save = jax.jit(
-                to_host, in_shardings=(state_shardings,), out_shardings=None
-            )(state)
-            open(output_dir / "params.msgpack", "wb").write(
-                serialization.msgpack_serialize(params_to_save)
+            checkpoint.save(
+                output_dir / "params.msgpack",
+                state.params,
+                state_shardings.params,
+                mesh,
+                train_mask,
             )
 
         if (step + 1) % args.sync_interval == 0:

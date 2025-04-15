@@ -4,8 +4,6 @@ import tokenizers
 from tokenizers import models, pre_tokenizers, decoders, normalizers, Tokenizer
 import copy
 
-#import rust_utils
-
 from tokenkit import utils, constants, align
 from tokenkit.byteify import ByteifyTokenizer
 from tokenkit.utils import tqdm
@@ -26,6 +24,11 @@ class TokenizerSamplerCollator:
             texts.append(text[start:end])
 
         samplers = []
+
+        try:
+            import rust_utils
+        except ImportError:
+            raise ImportError("rust_utils is required for `TokenizerSamplerCollator` but not installed. Please install following the instructions in https://github.com/bminixhofer/tokenkit/blob/main/README.md#Installation.")
 
         for _ in range(self.collator_args.n_pools):
             sampler = rust_utils.TokenizerSampler()
@@ -70,6 +73,9 @@ class TokenizerSamplerCollator:
         self.with_alignments = with_alignments
         self.original_tokenizer = original_tokenizer
         self.space_mask_mode = space_mask_mode
+
+        if self.with_consistent_whitespace:
+            raise NotImplementedError("TokenizerSamplerCollator does not support `with_consistent_whitespace` at the moment.")
 
         assert (tokenizer_name is None) == self.collator_args.do_tokenizer_sampling
 

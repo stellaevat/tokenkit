@@ -389,7 +389,7 @@ def param_report(params, train_mask):
 
 
 def get_surface_form_matrix(
-    tokenizer_or_tokens, maxlen, hn_tokenizer=None, padding=0, verbose=False
+    tokenizer_or_tokens, maxlen, hn_tokenizer: ByteifyTokenizer, padding=0, verbose=False
 ):
     # tokens are expected to be byte encoded
     if isinstance(tokenizer_or_tokens, list):
@@ -412,7 +412,7 @@ def get_surface_form_matrix(
             surface_form_matrix[i, 0] = hn_tokenizer.convert_tokens_to_ids(token)
             continue
 
-        ids = hn_tokenizer.convert_tokens_to_ids(hn_tokenizer.backend_tokenize(token, unsafe="auto"))
+        ids = hn_tokenizer.backend_tokenize_with_byte_fallback(token, unsafe="auto")
 
         if len(ids) > maxlen:
             ids = ids[:maxlen]

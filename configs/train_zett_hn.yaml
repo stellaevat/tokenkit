@@ -14,7 +14,6 @@ name: "unnamed"
 compat: false
 eval_at_step_zero: false
 save_at_step_zero: false
-eval_with_consistent_whitespace: true
 
 n_data_parallel: 1
 n_model_parallel: 8
@@ -34,17 +33,15 @@ optimizer:
   learning_rate: 6e-5
 
 eval:
-  tasks: ["piqa", "hellaswag", "arc_easy"]
+  tasks: [piqa,hellaswag,arc_easy]
   lengths: [128, 256, 512, 1024, 2048]
   tokens_per_batch: 8192
   add_bos: true
   chat_template_mode: direct_encode
   confirm_run_unsafe_code: true
-  tokenizers: []
-  # - tokenizer: artifacts/tokenizers/gpt20001
-  #   name: gpt2
-  #  - tokenizer: artifacts/tokenizers/llama0001
-  #    name: llama2
+  tokenizers:
+    - tokenizer: openai-community/gpt2:source=GPT2:target=TinyLlama
+      name: gpt2
 
 data:
   batch_size: 128
@@ -85,7 +82,7 @@ hypernet:
   use_attention: true
   num_layers: 3
   shared: true
-  num_heads: 12
+  num_heads: 16
   use_attention_mask: false
   multiply_hidden_dim_by_num_embeddings: false
 
@@ -103,5 +100,6 @@ optimizer:
       lr_scale: 2
 
 model:
-  pretrained_model_name_or_path: "openai-community/gpt2"
-  tokenizer_name: "openai-community/gpt2:source=GPT2"
+  pretrained_model_name_or_path: "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+  tokenizer_name: "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T:source=TinyLlama"
+  revision: "refs/pr/8"

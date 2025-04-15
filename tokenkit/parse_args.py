@@ -51,6 +51,7 @@ class EvalArgs:
 class ModelArgs:
     pretrained_model_name_or_path: str
     tokenizer_name: str
+    revision: str | None = None
 
 def restore_dataclasses(args, cls):
     for field in fields(cls):

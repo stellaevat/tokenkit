@@ -86,8 +86,6 @@ class CrossTokenizerDistillArgs:
     n_data_parallel: int = 1
     n_model_parallel: int = 8
     loss_weights: list[float] | None = None
-    loss_weight_mode: str | None = None
-    uncertainty_s_init: float = 0
     loss_schedules: list[str] | None = None
     ema_alpha: float = 0.95
     multitask_aggregation_fn: str | None = None
@@ -123,7 +121,6 @@ class TrainState(train_state.TrainState):
     train_mask: Any
     space_mask_teacher: jnp.ndarray
     space_mask_new: jnp.ndarray
-    loss_ema_stats: jnp.ndarray
 
 
 def _unimplemented_apply_fn(*args, **kwargs):
@@ -192,9 +189,6 @@ def get_state(
         "teacher_model": jax.tree.map(lambda x: x.astype(dtype), teacher_model_params),
         "teacher_embeddings": teacher_embeddings,
         "new_embeddings": new_embeddings,
-        "loss_weights": jnp.full(
-            len(args.losses), fill_value=args.uncertainty_s_init, dtype=jnp.float32
-        ),
     }
 
     if args.expand_input_ids:
@@ -322,9 +316,6 @@ def get_state(
             tx=opt.get_optimizer(train_mask, learning_rate_fn, **optimizer_kwargs),
             space_mask_teacher=space_mask_teacher,
             space_mask_new=space_mask_new,
-            loss_ema_stats=jnp.full(
-                (len(args.losses), 2), fill_value=jnp.nan, dtype=jnp.float32
-            ),
         )
 
     state_shape = jax.eval_shape(_jit_init_state, params)
@@ -865,7 +856,6 @@ def main(args: CrossTokenizerDistillArgs):
             )
 
             loss_values = jnp.zeros(len(args.losses), dtype=jnp.float32)
-            loss_ema_stats = state.loss_ema_stats
 
             for loss_idx, loss in enumerate(args.losses):
                 if loss == "sft":
@@ -931,50 +921,9 @@ def main(args: CrossTokenizerDistillArgs):
                 scalar_report[f"loss/{loss}"] = current_loss
                 scalar_report[f"loss/{loss}_weight"] = weight
 
-                if args.loss_weight_mode == "balance":
-                    loss_values = loss_values.at[loss_idx].set(
-                        weight * current_loss / jax.lax.stop_gradient(current_loss)
-                    )
-                elif args.loss_weight_mode == "uncertainty":
-                    uncertainty_s = params["loss_weights"][loss_idx]
-                    loss_values = loss_values.at[loss_idx].set(
-                        weight * current_loss * jnp.exp(-uncertainty_s)
-                        + (uncertainty_s / 2)
-                    )
-                    scalar_report[f"loss/uncertainty_s_{loss}"] = uncertainty_s
-                elif args.loss_weight_mode == "ema":
-                    loss_ema_stats = loss_ema_stats.at[loss_idx, 0].set(
-                        jnp.where(
-                            jnp.isnan(loss_ema_stats[loss_idx, 0]),
-                            current_loss,
-                            args.ema_alpha * loss_ema_stats[loss_idx, 0]
-                            + (1 - args.ema_alpha) * current_loss,
-                        )
-                    )
-                    loss_ema_stats = loss_ema_stats.at[loss_idx, 1].set(
-                        jnp.where(
-                            jnp.isnan(loss_ema_stats[loss_idx, 1]),
-                            1.0,
-                            args.ema_alpha * loss_ema_stats[loss_idx, 1]
-                            + (1 - args.ema_alpha)
-                            * (current_loss - loss_ema_stats[loss_idx, 0]) ** 2,
-                        )
-                    )
+                loss_values = loss_values.at[loss_idx].set(weight * current_loss)
 
-                    running_std = jnp.maximum(
-                        jnp.sqrt(loss_ema_stats[loss_idx, 1]), 1e-6
-                    )
-                    normalized_loss = (
-                        current_loss - loss_ema_stats[loss_idx, 0]
-                    ) / running_std
-                    scalar_report[f"loss/{loss}_normalized"] = normalized_loss
-                    scalar_report[f"loss/{loss}_ema_mean"] = loss_ema_stats[loss_idx, 0]
-                    scalar_report[f"loss/{loss}_ema_var"] = loss_ema_stats[loss_idx, 1]
-                    loss_values = loss_values.at[loss_idx].set(weight * normalized_loss)
-                else:
-                    loss_values = loss_values.at[loss_idx].set(weight * current_loss)
-
-            return loss_values, (scalar_report, loss_ema_stats)
+            return loss_values, scalar_report
 
         trainable_params = jax.tree.map(
             lambda x, m: x if m else None, state.params, train_mask
@@ -989,11 +938,11 @@ def main(args: CrossTokenizerDistillArgs):
         if args.multitask_aggregation_fn is None:
 
             def compute_loss_avg(*pargs):
-                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*pargs)
-                return jnp.mean(loss_values), (scalar_report, loss_ema_stats)
+                loss_values, scalar_report = compute_loss(*pargs)
+                return jnp.mean(loss_values), scalar_report
 
             grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=1)
-            (loss, (scalar_report, loss_ema_stats)), grad = grad_fn(
+            (loss, scalar_report), grad = grad_fn(
                 state.params, trainable_params
             )
         elif args.multitask_aggregation_fn in {"approx_gradmag", "approx_gradmag_preserve_mag"}:
@@ -1013,16 +962,13 @@ def main(args: CrossTokenizerDistillArgs):
             last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0) / denominator, multitask.gradmag(last_layer_grads))
 
             def compute_loss_weighted(*pargs):
-                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*pargs)
-                return jnp.sum(loss_values * approx_loss_weights) / denominator, (
-                    scalar_report,
-                    loss_ema_stats,
-                )
+                loss_values, scalar_report = compute_loss(*pargs)
+                return jnp.sum(loss_values * approx_loss_weights) / denominator, scalar_report
 
             grad_fn = jax.value_and_grad(
                 compute_loss_weighted, has_aux=True, argnums=2
             )
-            (loss, (scalar_report, loss_ema_stats)), non_last_layer_grad = grad_fn(
+            (loss, scalar_report), non_last_layer_grad = grad_fn(
                 state.params, last_layer_trainable_params, trainable_params
             )
 
@@ -1039,11 +985,11 @@ def main(args: CrossTokenizerDistillArgs):
         else:
 
             def compute_loss_with_aux_value(*args):
-                loss_values, (scalar_report, loss_ema_stats) = compute_loss(*args)
-                return loss_values, (scalar_report, loss_ema_stats, loss_values)
+                loss_values, scalar_report = compute_loss(*args)
+                return loss_values, (scalar_report, loss_values)
 
             jac_fn = jax.jacrev(compute_loss_with_aux_value, has_aux=True, argnums=1)
-            (grads, (scalar_report, loss_ema_stats, loss_values)) = jac_fn(
+            (grads, (scalar_report, loss_values)) = jac_fn(
                 state.params, trainable_params
             )
 
@@ -1087,7 +1033,7 @@ def main(args: CrossTokenizerDistillArgs):
             state.params,
             is_leaf=lambda x: x is None,
         )
-        new_state = state.apply_gradients(grads=grad, loss_ema_stats=loss_ema_stats)
+        new_state = state.apply_gradients(grads=grad)
 
         metrics = {
             "loss": loss,

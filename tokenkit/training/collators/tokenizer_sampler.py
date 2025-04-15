@@ -165,8 +165,8 @@ class TokenizerSamplerCollator:
                     tokenizer_student=tokenizer,
                 )
 
-                encodings["alignment_matrix_a"] = alignment_matrix_a
-                encodings["alignment_matrix_b"] = alignment_matrix_b
+                encodings["alignment_matrix_a_unconstrained"] = alignment_matrix_a
+                encodings["alignment_matrix_b_unconstrained"] = alignment_matrix_b
                 encodings["alignment_matrix_a_space"] = alignment_matrix_a_space
                 encodings["alignment_matrix_b_space"] = alignment_matrix_b_space
                 encodings["input_ids_original"] = original_encodings["input_ids"]

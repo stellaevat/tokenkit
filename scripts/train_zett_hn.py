@@ -942,6 +942,9 @@ def main(args: TrainZettHnArgs):
         batch = sharding.sync_across_devices(batch)
         batch = sharding.to_global_array(batch, current_batch_shardings)
 
+        if args.dry_run:
+            continue
+
         state, step_metrics = current_step_fn(state, batch)
         train_metrics.append(step_metrics)
 

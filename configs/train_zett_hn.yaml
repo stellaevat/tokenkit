@@ -40,7 +40,7 @@ eval:
   chat_template_mode: direct_encode
   confirm_run_unsafe_code: true
   tokenizers:
-    - tokenizer: openai-community/gpt2:source=GPT2:target=TinyLlama
+    - tokenizer: openai-community/gpt2:source=GPT2:target=TinyLlama:conversion=manual_add_prefix_space
       name: gpt2
 
 data:
@@ -61,7 +61,7 @@ collator:
   do_tokenizer_sampling: true
   sample_text_span: true
   n_pools: 1
-  add_prefix_space: false
+  add_prefix_space: true
   hn_surface_maxlen: 8
   n_token_subsample: null
   identity_n_token_subsample: 16384

@@ -121,10 +121,11 @@ def to_byte_level_tokenizer(
 
 class ByteifyTokenizer:
     def __init__(
-        self, tokenizer: PreTrainedTokenizerFast, model_kind_cls: BaseModelKind
+        self, tokenizer: PreTrainedTokenizerFast, model_kind_cls: BaseModelKind, manual_add_prefix_space: bool = False
     ):
         self.tokenizer = tokenizer
         self.model_kind_cls = model_kind_cls
+        self.manual_add_prefix_space = manual_add_prefix_space
 
         if any(
             isinstance(self.tokenizer.backend_tokenizer.normalizer, x)
@@ -196,9 +197,22 @@ class ByteifyTokenizer:
         return self.vocab
 
     def __call__(self, *args, **kwargs):
-        kwargs.pop("add_special_tokens", None)
+        def _recurse_add_prefix_space(data):
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    data[k] = _recurse_add_prefix_space(v)
+            elif isinstance(data, list):
+                for i in range(len(data)):
+                    data[i] = _recurse_add_prefix_space(data[i])
+            elif isinstance(data, str):
+                if self.manual_add_prefix_space and not data.startswith(" "):
+                    data = " " + data
 
-        return self.tokenizer(*args, **kwargs, add_special_tokens=False)
+            return data
+
+        args = [_recurse_add_prefix_space(copy.deepcopy(arg)) for i, arg in enumerate(args) if i < 4]
+        kwargs = {k: _recurse_add_prefix_space(copy.deepcopy(v)) if k in {"text", "text_pair", "text_target", "text_pair_target"} else v for k, v in kwargs.items()}
+        return self.tokenizer(*args, **kwargs)
 
     def __len__(self):
         return len(self.tokenizer)
@@ -258,7 +272,7 @@ class ByteifyTokenizer:
             pretoken_string = self.tokenizer.backend_tokenizer.normalizer.normalize_str(
                 pretoken_string
             )
-        
+
         pretoken_string = _make_left_count_match_or_be_zero(pretoken_string, "▁", space_count)
         pretoken_string = _make_left_count_match_or_be_zero(pretoken_string, " ", space_count)
 
@@ -332,6 +346,7 @@ def load_byteify_tokenizer(tokenizer_spec: str) -> ByteifyTokenizer:
             tokens_used_in_template.update(values)
 
     conversion = kwargs.get("conversion")
+    manual_add_prefix_space = False
 
     if conversion == "byte":
         tokenizer = to_byte_level_tokenizer(
@@ -342,12 +357,15 @@ def load_byteify_tokenizer(tokenizer_spec: str) -> ByteifyTokenizer:
         target_model_kind_cls.byte_fallback_fn = lambda x: x
     elif conversion == "prebyteified":
         target_model_kind_cls.byte_fallback_fn = lambda x: x
+    elif conversion == "manual_add_prefix_space":
+        manual_add_prefix_space = True
+        target_model_kind_cls.byte_fallback_fn = source_model_kind_cls.byte_fallback_fn
     elif conversion is not None:
         raise ValueError(f"Invalid conversion: {conversion}")
     else:
         target_model_kind_cls.byte_fallback_fn = source_model_kind_cls.byte_fallback_fn
 
-    byteify_tokenizer = ByteifyTokenizer(tokenizer, target_model_kind_cls)
+    byteify_tokenizer = ByteifyTokenizer(tokenizer, target_model_kind_cls, manual_add_prefix_space)
     byteify_vocab = byteify_tokenizer.get_vocab()
 
     missing_template_tokens = tokens_used_in_template - set(byteify_vocab.keys())

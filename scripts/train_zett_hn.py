@@ -694,8 +694,14 @@ def main(args: TrainZettHnArgs):
                 state.params, trainable_params
             )
         else:
-            raise NotImplementedError()
-
+            raise NotImplementedError()#
+        
+        grad = jax.tree.map(
+            lambda g, p: g if g is not None else jnp.zeros_like(p),
+            grad,
+            state.params,
+            is_leaf=lambda x: x is None,
+        )
         new_state = state.apply_gradients(grads=grad)
 
         metrics = {

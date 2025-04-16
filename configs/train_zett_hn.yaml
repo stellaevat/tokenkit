@@ -1,0 +1,105 @@
+losses: ["sft"]
+output: "outputs/hn"
+seed: 1234
+dtype: bfloat16
+pad_to_multiple_of: 128
+identity_steps: 0
+identity_lr: 3.e-4
+warmup_steps: 10_000
+steps: 200_000
+train_embeddings: false
+train_model: false
+num_workers: 64
+name: "unnamed"
+compat: false
+eval_at_step_zero: false
+save_at_step_zero: false
+
+n_data_parallel: 1
+n_model_parallel: 8
+
+latents_to_align: "all_hidden_states+qkv"
+latents_normalization: "l2_channelwise"
+distill_chunk_sizes: [1]
+
+log_interval: 50
+sync_interval: 100
+eval_interval: 10_000
+save_interval: 10_000
+
+ppl_eval_data: null
+
+optimizer:
+  learning_rate: 6e-5
+
+eval:
+  tasks: [piqa,hellaswag,arc_easy]
+  lengths: [128, 256, 512, 1024, 2048]
+  tokens_per_batch: 8192
+  add_bos: true
+  chat_template_mode: direct_encode
+  confirm_run_unsafe_code: true
+  tokenizers:
+    - tokenizer: openai-community/gpt2:source=GPT2:target=TinyLlama:conversion=manual_add_prefix_space
+      name: gpt2
+
+data:
+  batch_size: 128
+  num_workers: 16
+  kind: hf
+  mix_languages: false
+  streaming: true
+  dataset_configs:
+  - lang_code: en
+    kwargs:
+      path: "allenai/madlad-400"
+      name: "en"
+      split: "clean"
+
+# TODO: disentangle data/collator args
+collator:
+  do_tokenizer_sampling: true
+  sample_text_span: true
+  n_pools: 1
+  add_prefix_space: true
+  hn_surface_maxlen: 8
+  n_token_subsample: null
+  identity_n_token_subsample: 16384
+  pad_to_multiple_of: 128
+  tokenizer_sample_max: 32768
+  tokenizer_sample_mean: 32768
+  tokenizer_sample_min: 32768
+  tokenizer_sample_std: 0
+  tokenizer_batch_size: 2048
+  tokenizer_noise_std: 4
+  tokenizer_noise_mean: 1.e-5
+  block_size: 128
+
+hypernet:
+  architecture: transformer
+  residual_alpha: 1
+  residual: true
+  use_attention: true
+  num_layers: 3
+  shared: true
+  num_heads: 16
+  use_attention_mask: false
+  multiply_hidden_dim_by_num_embeddings: false
+
+optimizer:
+  type: adamw
+  weight_decay: 0.01
+  b1: 0.9
+  b2: 0.95
+  eps: 1.e-8
+  grad_acc_steps: null
+  learning_rate: 1.e-5
+  max_grad_norm: 1.0
+  param_groups:
+    - pattern: .*(projector_query|projector_s2t|projector_t2s|projector_latents|loss_weights).*
+      lr_scale: 2
+
+model:
+  pretrained_model_name_or_path: "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+  tokenizer_name: "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T:source=TinyLlama"
+  revision: "refs/pr/8"

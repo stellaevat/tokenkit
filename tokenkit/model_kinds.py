@@ -182,6 +182,31 @@ class GPT2ModelKind(BaseModelKind):
         }
 
 
+class TinyLlamaModelKind(BaseModelKind):
+    def __init__(self):
+        super().__init__()
+        self._byte_fallback_fn = sentencepiece_byte_fallback_byte_fn
+        self._byte_fallback_precedence_fn = sentencepiece_byte_fallback_precedence_fn
+
+    @property
+    def special_tokens(self) -> List[str]:
+        return ["<s>", "</s>", "<unk>"]
+
+    @property
+    def replacements(self) -> Dict[str, Optional[List[str]]]:
+        return {
+            "<|<bos>|>": ["<s>"],
+            "<|<pad>|>": ["</s>"],
+            "<|<start_header>|>": None, # chat template exists but not supported for TinyLlama
+            "<|<end_header>|>": None,
+            "<|<eos>|>": ["</s>"],
+            "<|<eot>|>": ["</s>"],
+            "<|<system_name>|>": None,
+            "<|<user_name>|>": None,
+            "<|<assistant_name>|>": None,
+        }
+
+
 # Model kind registry
 def get_model_kind_cls(model_kind: str) -> BaseModelKind:
     return {
@@ -190,4 +215,5 @@ def get_model_kind_cls(model_kind: str) -> BaseModelKind:
         "Gemma2": Gemma2ModelKind(),
         "Phi3": Phi3ModelKind(),
         "GPT2": GPT2ModelKind(),
+        "TinyLlama": TinyLlamaModelKind(),
     }[model_kind]

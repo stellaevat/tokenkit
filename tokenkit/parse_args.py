@@ -11,8 +11,8 @@ class DataArgs:
     kind: str
     mix_languages: bool
     streaming: bool
-    shuffle_buffer_size: int | str
     dataset_configs: list[dict]
+    shuffle_buffer_size: int | str | None = None
 
 @dataclass
 class HypernetArgs:
@@ -21,6 +21,10 @@ class HypernetArgs:
     residual: bool
     residual_alpha: float
     use_attention: bool
+    use_attention_mask: bool = False
+    num_heads: int = 16
+    shared: bool = True
+    multiply_hidden_dim_by_num_embeddings: bool = True
 
 @dataclass
 class OptimizerArgs:
@@ -47,6 +51,7 @@ class EvalArgs:
 class ModelArgs:
     pretrained_model_name_or_path: str
     tokenizer_name: str
+    revision: str | None = None
 
 def restore_dataclasses(args, cls):
     for field in fields(cls):

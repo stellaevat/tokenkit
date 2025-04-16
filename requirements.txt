@@ -20,4 +20,5 @@ jax-bitempered-loss==0.0.2
 editdistance==0.8.1
 langdetect==1.0.9
 immutabledict==4.2.1
+maturin==1.8.3
 git+https://github.com/google/CommonLoopUtils@307b0bc65ae2e2d801b6c19df2431c060a0aa4ec

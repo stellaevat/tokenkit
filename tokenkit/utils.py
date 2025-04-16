@@ -83,7 +83,7 @@ def get_space_mask(tokenizer, space_mask_mode):
 
 
 def get_expand_input_ids_matrix(
-    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
+    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH, module=np
 ):
     expansion_data = []
     expansion_indices = []
@@ -108,8 +108,8 @@ def get_expand_input_ids_matrix(
     expansion_indices.insert(0, [0] * max_length)
 
     return (
-        np.array(expansion_data, dtype=np.int32),
-        np.array(expansion_indices, dtype=np.int32),
+        module.array(expansion_data, dtype=module.int32),
+        module.array(expansion_indices, dtype=module.int32),
     )
 
 def get_expand_input_ids_dict(
@@ -389,7 +389,7 @@ def param_report(params, train_mask):
 
 
 def get_surface_form_matrix(
-    tokenizer_or_tokens, maxlen, hn_tokenizer=None, padding=0, verbose=False
+    tokenizer_or_tokens, maxlen, hn_tokenizer: ByteifyTokenizer, padding=0, verbose=False
 ):
     # tokens are expected to be byte encoded
     if isinstance(tokenizer_or_tokens, list):
@@ -412,8 +412,7 @@ def get_surface_form_matrix(
             surface_form_matrix[i, 0] = hn_tokenizer.convert_tokens_to_ids(token)
             continue
 
-        # assume hn tokenizer uses byte pretokenization
-        ids = [x.id for x in hn_tokenizer._tokenizer.model.tokenize(token)]
+        ids = hn_tokenizer.backend_tokenize_with_byte_fallback(token, unsafe="auto")
 
         if len(ids) > maxlen:
             ids = ids[:maxlen]

@@ -44,7 +44,6 @@ def cross_entropy(
 
 @dataclass
 class LossArgs:
-    state: Any
     params: Any
     batch: Any
     global_batch: Any
@@ -62,6 +61,10 @@ class LossArgs:
     student_logits: Any
     predicted_embeddings: Any
     scalar_report: Any
+    space_mask_teacher: Any
+    space_mask_new: Any
+    logit_mask_teacher: Any
+    logit_mask_new: Any
 
 
 def compute_alm_latents_loss(args, loss_args, epsilon=1e-8):
@@ -394,7 +397,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
     else:
         t_space_logp = jnp.clip(
             jnp.log(
-                jnp.dot(loss_args.teacher_probs, loss_args.state.space_mask_teacher)
+                jnp.dot(loss_args.teacher_probs, loss_args.space_mask_teacher)
             ),
             max=0.0,
         )
@@ -427,7 +430,7 @@ def compute_alm_loss(chunk_kind, args, loss_args, epsilon=1e-6):
         ]
     else:
         s_space_logp = jnp.clip(
-            jnp.log(jnp.dot(loss_args.student_probs, loss_args.state.space_mask_new)),
+            jnp.log(jnp.dot(loss_args.student_probs, loss_args.space_mask_new)),
             max=0.0,
         )
 
@@ -788,21 +791,14 @@ def compute_baseline_dskd_loss(args, loss_args, epsilon=1e-8):
     align = s_q_hiddens @ jnp.swapaxes(t_k_hiddens, -1, -2)
     align = align / jnp.sqrt(2 * t_hiddens.shape[-1])
 
-    if args.baseline.dskd_use_causal_attention_mask:
-        cum_ends_new = loss_args.batch["cum_lengths_new"]
-        cum_ends_original = loss_args.batch["cum_lengths_original"]
-
-        t2s_align_mask = cum_ends_new[:, :-1, None] <= cum_ends_original[:, None, :-1]
-        s2t_align_mask = cum_ends_original[:, :-1, None] <= cum_ends_new[:, None, :-1]
-    else:
-        t2s_align_mask = (
-            loss_args.batch["attention_mask_new"][:, 1:, None]
-            * loss_args.batch["attention_mask_original"][:, None, 1:]
-        )
-        s2t_align_mask = (
-            loss_args.batch["attention_mask_original"][:, 1:, None]
-            * loss_args.batch["attention_mask_new"][:, None, 1:]
-        )
+    t2s_align_mask = (
+        loss_args.batch["attention_mask_new"][:, 1:, None]
+        * loss_args.batch["attention_mask_original"][:, None, 1:]
+    )
+    s2t_align_mask = (
+        loss_args.batch["attention_mask_original"][:, 1:, None]
+        * loss_args.batch["attention_mask_new"][:, None, 1:]
+    )
 
     t2s_weight = jax.nn.softmax(
         jnp.where(t2s_align_mask, align, utils.get_large_negative_number(align.dtype)),
@@ -825,7 +821,7 @@ def compute_baseline_dskd_loss(args, loss_args, epsilon=1e-8):
         t2s_logits,
         loss_args.batch["input_ids_new"],
         loss_args.batch["loss_mask_new"],
-        logit_mask=loss_args.state.logit_mask_new,
+        logit_mask=loss_args.logit_mask_new,
         logits_already_shifted=True,
         denom=loss_args.global_batch["loss_mask_new"][:, 1:].mean(),
     )
@@ -979,7 +975,7 @@ def compute_baseline_mined_loss(mined_mapping, args, loss_args):
                 mined_mapping, (0, loss_args.new_config.vocab_size - len(mined_mapping))
             ),
         ]
-        + loss_args.state.logit_mask_new[None, None]
+        + loss_args.logit_mask_new[None, None]
     )
     onehot_probs = jax.nn.one_hot(
         loss_args.batch["input_ids_new"][:, 1:], loss_args.new_config.vocab_size
@@ -989,7 +985,7 @@ def compute_baseline_mined_loss(mined_mapping, args, loss_args):
     onehot_logits = (
         onehot_probs * 100
         + (1 - onehot_probs) * -100_000
-        + loss_args.state.logit_mask_new[None, None]
+        + loss_args.logit_mask_new[None, None]
     )
 
     mined_teacher_logits = jax.lax.with_sharding_constraint(

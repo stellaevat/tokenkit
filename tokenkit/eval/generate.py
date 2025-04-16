@@ -129,7 +129,7 @@ class Generator:
         self.expand_input_ids = expand_input_ids
         if expand_input_ids:
             self.expand_input_ids_matrix = utils.get_expand_input_ids_matrix(
-                tokenizer, expand_input_ids_vocab
+                tokenizer, expand_input_ids_vocab, module=jnp
             )
             self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
                 tokenizer, expand_input_ids_vocab

@@ -30,6 +30,40 @@ def fix_postprocessor_data(data, vocab):
         for postprocessor in data["processors"]:
             fix_postprocessor_data(postprocessor, vocab)
 
+def _get_left_count(string, symbol):
+    symbol_count = 0
+    while symbol_count < len(string) and string[symbol_count] == symbol:
+        symbol_count += 1
+
+    return symbol_count
+
+def _make_left_count_match_or_be_zero(string, symbol, count):
+    symbol_count = _get_left_count(string, symbol)
+
+    if symbol_count == 0 or symbol_count == count:
+        return string
+
+    elif symbol_count > count:
+        return string[symbol_count - count:]
+    else:
+        return symbol * (count - symbol_count) + string
+
+def _get_increasing_offset_pairs(n: int):
+    """Generate pairs of (start, end) offsets that sum to strictly increasing values.
+    
+    For a string of length n, generates offset pairs where:
+    - Each pair sums to a value from 0 to n
+    - For each sum value, generates all valid (start, end) combinations
+    - Pairs are ordered by sum, then by start index
+    
+    Example for n=2:
+    (0,0), (0,1), (1,0), (0,2), (1,1), (2,0), (1,2), (2,1)
+    """
+    for total in range(n + 1):
+        for start in range(total + 1):
+            end = total - start
+            if end <= n:
+                yield (start, end)
 
 def to_byte_level_tokenizer(
     tokenizer, model_kind_cls, tokens_to_keep=None, inplace=False
@@ -87,10 +121,11 @@ def to_byte_level_tokenizer(
 
 class ByteifyTokenizer:
     def __init__(
-        self, tokenizer: PreTrainedTokenizerFast, model_kind_cls: BaseModelKind
+        self, tokenizer: PreTrainedTokenizerFast, model_kind_cls: BaseModelKind, manual_add_prefix_space: bool = False
     ):
         self.tokenizer = tokenizer
         self.model_kind_cls = model_kind_cls
+        self.manual_add_prefix_space = manual_add_prefix_space
 
         if any(
             isinstance(self.tokenizer.backend_tokenizer.normalizer, x)
@@ -107,9 +142,9 @@ class ByteifyTokenizer:
             self.tokenizer.backend_tokenizer.normalizer = None
         elif isinstance(
             self.tokenizer.backend_tokenizer.normalizer, tokenizers.normalizers.Sequence
-        ):
+        ) and any(x in repr(self.tokenizer.backend_tokenizer.normalizer) for x in ["NFC", "NFD", "NFKC", "NFKD"]):
             raise ValueError(
-                "ByteifyTokenizer does not currently support sequence normalizers. Please open an issue / check existing issues."
+                "ByteifyTokenizer does not currently support sequence normalizers with constituents NFC, NFD, NFKC, NFKD. Please open an issue about this tokenizer / check existing issues."
             )
 
         for special_token, name in [
@@ -162,9 +197,22 @@ class ByteifyTokenizer:
         return self.vocab
 
     def __call__(self, *args, **kwargs):
-        kwargs.pop("add_special_tokens", None)
+        def _recurse_add_prefix_space(data):
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    data[k] = _recurse_add_prefix_space(v)
+            elif isinstance(data, list):
+                for i in range(len(data)):
+                    data[i] = _recurse_add_prefix_space(data[i])
+            elif isinstance(data, str):
+                if self.manual_add_prefix_space and not data.startswith(" "):
+                    data = " " + data
 
-        return self.tokenizer(*args, **kwargs, add_special_tokens=False)
+            return data
+
+        args = [_recurse_add_prefix_space(copy.deepcopy(arg)) for i, arg in enumerate(args) if i < 4]
+        kwargs = {k: _recurse_add_prefix_space(copy.deepcopy(v)) if k in {"text", "text_pair", "text_target", "text_pair_target"} else v for k, v in kwargs.items()}
+        return self.tokenizer(*args, **kwargs)
 
     def __len__(self):
         return len(self.tokenizer)
@@ -202,11 +250,14 @@ class ByteifyTokenizer:
     def encode(self, *args, **kwargs):
         return self.tokenizer.encode(*args, **kwargs)
 
-    def backend_tokenize(self, pretoken: str, unsafe=False) -> List[str]:
+    # TODO: return ids instead of tokens
+    def backend_tokenize(self, pretoken: str, unsafe: bool | str = False) -> List[str]:
         if len(pretoken) == 0:
             return []
 
-        if unsafe:
+        is_unsafe = unsafe is True or (unsafe == "auto" and isinstance(self.tokenizer.backend_tokenizer.pre_tokenizer, tokenizers.pre_tokenizers.ByteLevel))
+
+        if is_unsafe:
             return [x.value for x in self.tokenizer.backend_tokenizer.model.tokenize(pretoken)]
 
         # this is not ideal: needs the pretoken to be a decodable string
@@ -215,24 +266,27 @@ class ByteifyTokenizer:
         pretoken_bytes = bytes([CHARS_TO_BYTES[c] for c in pretoken])
         pretoken_string = pretoken_bytes.decode("utf-8")
 
-        starts_with_space = pretoken_string[0] == " "
+        space_count = _get_left_count(pretoken_string, " ")
+
         if self.tokenizer.backend_tokenizer.normalizer is not None:
             pretoken_string = self.tokenizer.backend_tokenizer.normalizer.normalize_str(
                 pretoken_string
             )
-        if not starts_with_space:
-            pretoken_string = pretoken_string.lstrip("▁").lstrip(" ")
 
-        pretoken_string = "".join(
-            [
-                x[0]
-                for x in self.tokenizer.backend_tokenizer.pre_tokenizer.pre_tokenize_str(
-                    pretoken_string
-                )
-            ]
-        )
-        if not starts_with_space:
-            pretoken_string = pretoken_string.lstrip("▁").lstrip(" ").lstrip("Ġ")
+        pretoken_string = _make_left_count_match_or_be_zero(pretoken_string, "▁", space_count)
+        pretoken_string = _make_left_count_match_or_be_zero(pretoken_string, " ", space_count)
+
+        if self.tokenizer.backend_tokenizer.pre_tokenizer is not None:
+                pretoken_string = "".join(
+                    [
+                        x[0]
+                    for x in self.tokenizer.backend_tokenizer.pre_tokenizer.pre_tokenize_str(
+                        pretoken_string
+                    )
+                ]
+            )
+
+        pretoken_string = _make_left_count_match_or_be_zero(pretoken_string, "Ġ", space_count)
 
         return self.convert_ids_to_tokens(
             [
@@ -242,6 +296,23 @@ class ByteifyTokenizer:
                 )
             ]
         )
+
+    def backend_tokenize_with_byte_fallback(self, pretoken: str, unsafe: bool | str = False) -> List[str]:
+       tokens = None
+       
+       for end_offset, start_offset in _get_increasing_offset_pairs(len(pretoken)):
+            start_idx = start_offset
+            end_idx = len(pretoken) - end_offset
+
+            try:
+                tokens = self.convert_tokens_to_ids(self.backend_tokenize(pretoken[start_idx:end_idx], unsafe))
+            except UnicodeDecodeError:
+                continue
+
+            if tokens is not None:
+                prefix = [CHARS_TO_BYTES[x] for x in pretoken[:start_idx]]
+                suffix = [CHARS_TO_BYTES[x] for x in pretoken[end_idx:]]
+                return prefix + tokens + suffix
 
     def decode(self, *args, **kwargs):
         return self.tokenizer.decode(*args, **kwargs)
@@ -275,6 +346,7 @@ def load_byteify_tokenizer(tokenizer_spec: str) -> ByteifyTokenizer:
             tokens_used_in_template.update(values)
 
     conversion = kwargs.get("conversion")
+    manual_add_prefix_space = False
 
     if conversion == "byte":
         tokenizer = to_byte_level_tokenizer(
@@ -285,12 +357,15 @@ def load_byteify_tokenizer(tokenizer_spec: str) -> ByteifyTokenizer:
         target_model_kind_cls.byte_fallback_fn = lambda x: x
     elif conversion == "prebyteified":
         target_model_kind_cls.byte_fallback_fn = lambda x: x
+    elif conversion == "manual_add_prefix_space":
+        manual_add_prefix_space = True
+        target_model_kind_cls.byte_fallback_fn = source_model_kind_cls.byte_fallback_fn
     elif conversion is not None:
         raise ValueError(f"Invalid conversion: {conversion}")
     else:
         target_model_kind_cls.byte_fallback_fn = source_model_kind_cls.byte_fallback_fn
 
-    byteify_tokenizer = ByteifyTokenizer(tokenizer, target_model_kind_cls)
+    byteify_tokenizer = ByteifyTokenizer(tokenizer, target_model_kind_cls, manual_add_prefix_space)
     byteify_vocab = byteify_tokenizer.get_vocab()
 
     missing_template_tokens = tokens_used_in_template - set(byteify_vocab.keys())

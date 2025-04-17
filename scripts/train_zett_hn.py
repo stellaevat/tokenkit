@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+from jax.experimental import multihost_utils
 from transformers import FlaxAutoModelForCausalLM
 from transformers.modeling_flax_outputs import FlaxCausalLMOutput
 import torch
@@ -18,8 +19,11 @@ from typing import Any
 from functools import partial
 from torchdata.stateful_dataloader import StatefulDataLoader
 import time
+import yaml
+from datetime import datetime
+import shutil
 
-from tokenkit import utils, data, eval, parse_args
+from tokenkit import utils, data, eval, parse_args, gcs_utils
 from tokenkit.hf import get_config
 from tokenkit.training import losses, opt, lr, collators, checkpoint, multitask
 from tokenkit.utils import tqdm
@@ -267,7 +271,12 @@ def main(args: TrainZettHnArgs):
         mesh = sharding.get_mesh(args.n_data_parallel, args.n_model_parallel)
 
     output_dir = Path(args.output)
+    # clear previous output dir
+    shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(exist_ok=True, parents=True)
+
+    with open(output_dir / "args.yaml", "w") as f:
+        yaml.dump(asdict(args), f)
 
     teacher_config = get_config(**asdict(args.model))
     student_config = get_config(**asdict(args.model))
@@ -979,6 +988,9 @@ def main(args: TrainZettHnArgs):
     train_metrics = []
     start_time = time.time()
 
+    upload_executor = None
+    upload_name = datetime.now().strftime("%Y%m%d%H%M%S") + "_" + args.name
+
     for step in tqdm(range(args.steps)):
         current_diter = identity_diter if step < args.identity_steps else diter
         current_first_batch = (
@@ -1092,6 +1104,10 @@ def main(args: TrainZettHnArgs):
                 utils.log(lm_eval_metrics, step=step + 1)
 
         if (step + 1) % args.save_interval == 0 or (step == 0 and args.save_at_step_zero):
+            if upload_executor is not None:
+                upload_executor.shutdown(wait=True)
+            multihost_utils.sync_global_devices("uploaded previous checkpoint")
+
             checkpoint.save(
                 output_dir / "params.msgpack",
                 state.params,
@@ -1099,6 +1115,13 @@ def main(args: TrainZettHnArgs):
                 mesh,
                 train_mask,
             )
+
+            if jax.process_index() == 0 and args.export_to_gcs_bucket is not None:
+                upload_executor = gcs_utils.upload_directory_to_gcs(
+                    args.export_to_gcs_bucket,
+                    output_dir,
+                    os.path.join(upload_name, f"step_{step + 1}"),
+                )
 
         if (step + 1) % args.sync_interval == 0:
             if jax.process_index() == 0:
@@ -1108,6 +1131,9 @@ def main(args: TrainZettHnArgs):
                     commit=True,
                 )
 
+    if upload_executor is not None:
+        upload_executor.shutdown(wait=True)
+    multihost_utils.sync_global_devices("uploaded final checkpoint")
 
 if __name__ == "__main__":
     os.environ["HYDRA_FULL_ERROR"] = "1"

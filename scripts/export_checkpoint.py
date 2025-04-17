@@ -215,14 +215,18 @@ if __name__ == "__main__":
 
         pt_model.save_pretrained(output_dir)
     else:
+        pt_model = None
+
         if args.expand_input_ids_model is not None:
             raise ValueError("expand_input_ids_model is not supported when with_pt is False")
 
     config.auto_map = {
         "AutoConfig": f"configuration_{config.model_type}.{type(config).__name__}",
-        "AutoModelForCausalLM": f"modelling_{config.model_type}.{type(pt_model).__name__}",
         "FlaxAutoModelForCausalLM": f"modelling_flax_{config.model_type}.{type(model_to_save).__name__}"
     }
+
+    if pt_model is not None:
+        config.auto_map["AutoModelForCausalLM"] = f"modelling_{config.model_type}.{type(pt_model).__name__}"
 
     tokenizer.save_pretrained(output_dir)
     config.save_pretrained(output_dir)

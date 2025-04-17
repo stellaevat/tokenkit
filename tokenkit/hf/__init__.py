@@ -23,3 +23,18 @@ FlaxTPUGemma2ForCausalLM.register_for_auto_class("FlaxAutoModelForCausalLM")
 FlaxTPUGemma2Model.register_for_auto_class("FlaxAutoModel")
 
 __all__ = ["TPULlamaConfig", "TPULlamaModel", "TPULlamaForCausalLM", "FlaxTPULlamaForCausalLM", "FlaxTPULlamaModel", "TPUGemma2Config", "TPUGemma2Model", "TPUGemma2ForCausalLM", "FlaxTPUGemma2ForCausalLM", "FlaxTPUGemma2Model"]
+
+
+def get_config(pretrained_model_name_or_path: str, **kwargs):
+    config = AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+    # compatibility with outside jax checkpoints
+    if config.model_type in {"llama", "tpu_llama"}:
+        config = TPULlamaConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        config.model_type = "tpu_llama"
+        return config
+    elif config.model_type in {"gemma2", "tpu_gemma2"}:
+        config = TPUGemma2Config.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        config.model_type = "tpu_gemma2"
+        return config
+    else:
+        return config

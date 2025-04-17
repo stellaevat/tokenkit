@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from transformers import (
     HfArgumentParser,
-    AutoConfig,
     AutoTokenizer,
     FlaxAutoModelForCausalLM,
     AutoModelForCausalLM,
@@ -18,7 +17,7 @@ import jax.numpy as jnp
 from tokenkit.models.hypernet import Hypernet
 from tokenkit.models import param, lora, sharding
 from tokenkit.byteify import load_byteify_tokenizer
-from tokenkit.hf import TPULlamaConfig, TPUGemma2Config
+from tokenkit.hf import get_config
 from tokenkit import gcs_utils, utils, constants
 import json
 import os
@@ -102,15 +101,7 @@ if __name__ == "__main__":
         open(checkpoint_dir / "params.msgpack", "rb").read()
     )
 
-    config = AutoConfig.from_pretrained(checkpoint_dir)
-    # backwards compatibility
-    if config.model_type == "llama":
-        config = TPULlamaConfig.from_pretrained(checkpoint_dir)
-        config.model_type = "tpu_llama"
-    elif config.model_type == "gemma2":
-        config = TPUGemma2Config.from_pretrained(checkpoint_dir)
-        config.model_type = "tpu_gemma2"
-
+    config = get_config(checkpoint_dir)
     config.mesh = mesh
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
     dtype = getattr(jnp, ckpt_args.dtype)
@@ -213,7 +204,7 @@ if __name__ == "__main__":
 
         # set expansion embedding data
         if args.expand_input_ids_model is not None:
-            expand_input_ids_model_config = AutoConfig.from_pretrained(args.expand_input_ids_model)
+            expand_input_ids_model_config = get_config(args.expand_input_ids_model)
             expand_input_ids_model_params = param.load_params(pretrained_model_name_or_path=args.expand_input_ids_model)
             expand_input_ids_embeddings = param.get(
                 expand_input_ids_model_params,

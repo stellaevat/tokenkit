@@ -10,15 +10,18 @@ from tokenkit.hf.modelling_flax_tpu_gemma2 import FlaxTPUGemma2ForCausalLM, Flax
 AutoConfig.register("tpu_llama", TPULlamaConfig)
 AutoModel.register(TPULlamaConfig, TPULlamaModel)
 AutoModelForCausalLM.register(TPULlamaConfig, TPULlamaForCausalLM)
+TPULlamaForCausalLM.register_for_auto_class("AutoModelForCausalLM")
+TPULlamaModel.register_for_auto_class("AutoModel")
 FlaxAutoModelForCausalLM.register(TPULlamaConfig, FlaxTPULlamaForCausalLM)
+FlaxTPULlamaForCausalLM.register_for_auto_class("FlaxAutoModelForCausalLM")
+FlaxTPULlamaModel.register_for_auto_class("FlaxAutoModel")
 
 AutoConfig.register("tpu_gemma2", TPUGemma2Config)
 AutoModel.register(TPUGemma2Config, TPUGemma2Model)
 AutoModelForCausalLM.register(TPUGemma2Config, TPUGemma2ForCausalLM)
+TPUGemma2ForCausalLM.register_for_auto_class("AutoModelForCausalLM")
+TPUGemma2Model.register_for_auto_class("AutoModel")
 FlaxAutoModelForCausalLM.register(TPUGemma2Config, FlaxTPUGemma2ForCausalLM)
-
-FlaxTPULlamaForCausalLM.register_for_auto_class("FlaxAutoModelForCausalLM")
-FlaxTPULlamaModel.register_for_auto_class("FlaxAutoModel")
 FlaxTPUGemma2ForCausalLM.register_for_auto_class("FlaxAutoModelForCausalLM")
 FlaxTPUGemma2Model.register_for_auto_class("FlaxAutoModel")
 

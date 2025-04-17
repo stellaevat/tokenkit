@@ -47,8 +47,7 @@ python -m venv tokenkit_env
 # For example:
 pip install torch jax[tpu]==0.5.0 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
-# Currently, tokenkit relies on forks of `transformers` and `lm_eval`
-pip install git+https://github.com/bminixhofer/transformers
+# Currently, tokenkit relies on a fork of `lm_eval`
 pip install git+https://github.com/bminixhofer/lm-evaluation-harness
 
 # Install the library and the remaining dependencies

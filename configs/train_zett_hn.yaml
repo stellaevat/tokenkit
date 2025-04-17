@@ -18,10 +18,6 @@ save_at_step_zero: false
 n_data_parallel: 1
 n_model_parallel: 8
 
-latents_to_align: "all_hidden_states+qkv"
-latents_normalization: "l2_channelwise"
-distill_chunk_sizes: [1]
-
 log_interval: 50
 sync_interval: 100
 eval_interval: 10_000

@@ -24,10 +24,11 @@ from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import AutoConfig, FlaxAutoModelForCausalLM
+from transformers import FlaxAutoModelForCausalLM
 
 import wandb
 from tokenkit import data, eval, gcs_utils, parse_args, utils
+from tokenkit.hf import get_config
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.models import lora, param, sharding
 from tokenkit.models.hypernet import Hypernet
@@ -398,11 +399,11 @@ def main(args: CrossTokenizerDistillArgs):
         yaml.dump(asdict(args), f)
 
     if args.teacher is not None:
-        teacher_config = AutoConfig.from_pretrained(**asdict(args.teacher))
+        teacher_config = get_config(**asdict(args.teacher))
     else:
-        teacher_config = AutoConfig.from_pretrained(**asdict(args.student))
+        teacher_config = get_config(**asdict(args.student))
 
-    student_config = AutoConfig.from_pretrained(**asdict(args.student))
+    student_config = get_config(**asdict(args.student))
 
     teacher_config.max_length = args.max_teacher_length
     if not args.debug and args.max_teacher_length % 128 == 0:

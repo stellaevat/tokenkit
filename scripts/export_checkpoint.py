@@ -1,23 +1,55 @@
 from dataclasses import dataclass
 from transformers import (
     HfArgumentParser,
-    AutoConfig,
     AutoTokenizer,
     FlaxAutoModelForCausalLM,
+    AutoModelForCausalLM,
 )
+from transformers.modeling_flax_pytorch_utils import load_flax_weights_in_pytorch_model
 from omegaconf import OmegaConf
 from flax import serialization, traverse_util
 from pathlib import Path
+from pickle import UnpicklingError
+from flax.serialization import from_bytes
+from flax.traverse_util import flatten_dict, unflatten_dict
 import jax
 import jax.numpy as jnp
 from tokenkit.models.hypernet import Hypernet
 from tokenkit.models import param, lora, sharding
-from tokenkit import gcs_utils
+from tokenkit.byteify import load_byteify_tokenizer
+from tokenkit.hf import get_config
+from tokenkit import gcs_utils, utils, constants
 import json
+import os
+import torch
 from pprint import pformat
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# transformers `load_flax_checkpoint_in_pytorch_model` does not support custom models
+# so we patch it here
+def load_flax_checkpoint_in_pytorch_model(model, flax_checkpoint_path, flax_cls):
+    """Load flax checkpoints in a PyTorch model"""
+    flax_checkpoint_path = os.path.abspath(flax_checkpoint_path)
+    logger.info(f"Loading Flax weights from {flax_checkpoint_path}")
+
+    # load flax weight dict
+    if flax_checkpoint_path.endswith(".safetensors"):
+        from safetensors.flax import load_file as safe_load_file
+
+        flax_state_dict = safe_load_file(flax_checkpoint_path)
+        flax_state_dict = unflatten_dict(flax_state_dict, sep=".")
+    else:
+        with open(flax_checkpoint_path, "rb") as state_f:
+            try:
+                flax_state_dict = from_bytes(flax_cls, state_f.read())
+            except UnpicklingError:
+                raise EnvironmentError(f"Unable to convert {flax_checkpoint_path} to Flax deserializable object. ")
+
+    return load_flax_weights_in_pytorch_model(model, flax_state_dict)
+
 
 
 @dataclass
@@ -26,6 +58,9 @@ class Args:
     output: str = "outputs/export"
     use_cpu: bool = False
     tmp_save_dir: str = "/tmp/tokenkit/"
+    with_pt: bool = False
+    expand_input_ids_model: str | None = None
+    expand_input_ids_tokenizer: str | None = None
     overwrite_args: str | None = None
 
 
@@ -66,7 +101,7 @@ if __name__ == "__main__":
         open(checkpoint_dir / "params.msgpack", "rb").read()
     )
 
-    config = AutoConfig.from_pretrained(checkpoint_dir)
+    config = get_config(checkpoint_dir)
     config.mesh = mesh
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
     dtype = getattr(jnp, ckpt_args.dtype)
@@ -82,7 +117,6 @@ if __name__ == "__main__":
         **ckpt_args.hypernet,
     )
     model_kwargs = OmegaConf.to_object(ckpt_args.student)
-    model = FlaxAutoModelForCausalLM.from_config(config, dtype=dtype, _do_init=False)
 
     if "model" in params:
         model_params = params["model"]
@@ -144,6 +178,52 @@ if __name__ == "__main__":
     model_to_save.save_pretrained(
         output_dir, params=merged_model_params, max_shard_size="100GB"
     )
+
+    if args.with_pt:
+        if args.expand_input_ids_model is not None:
+            byteify_tokenizer = load_byteify_tokenizer(ckpt_args.target_tokenizer_name)
+            expand_tokenizer = load_byteify_tokenizer(args.expand_input_ids_tokenizer)
+
+            expand_input_ids_dict = utils.get_expand_input_ids_dict(
+                byteify_tokenizer,
+                expand_tokenizer.get_vocab(),
+                max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
+            )
+
+            config.expand_input_ids = True
+            config.expand_input_ids_maxlen = constants.EXPAND_INPUT_IDS_MAX_LENGTH
+            config.expand_input_ids_vocab_size = len(expand_tokenizer)
+            # make json serializable - will be deserialized in PT model init
+            config.expand_input_ids_dict = (
+                {",".join([str(n) for n in k]): int(v) for k, v in expand_input_ids_dict[0].items()},
+                [int(n) for n in expand_input_ids_dict[1]],
+            )
+
+        pt_model = AutoModelForCausalLM.from_config(config)
+        pt_model = load_flax_checkpoint_in_pytorch_model(pt_model, output_dir / "flax_model.msgpack", type(model_to_save))
+
+        # set expansion embedding data
+        if args.expand_input_ids_model is not None:
+            expand_input_ids_model_config = get_config(args.expand_input_ids_model)
+            expand_input_ids_model_params = param.load_params(pretrained_model_name_or_path=args.expand_input_ids_model)
+            expand_input_ids_embeddings = param.get(
+                expand_input_ids_model_params,
+                param.get_input_embedding_path(expand_input_ids_model_config.model_type),
+            )
+
+            pt_model.model.expand_embed_tokens.weight.data[:] = torch.from_numpy(expand_input_ids_embeddings)
+
+        pt_model.save_pretrained(output_dir)
+    else:
+        if args.expand_input_ids_model is not None:
+            raise ValueError("expand_input_ids_model is not supported when with_pt is False")
+
+    config.auto_map = {
+        "AutoConfig": f"configuration_{config.model_type}.{type(config).__name__}",
+        "AutoModelForCausalLM": f"modelling_{config.model_type}.{type(pt_model).__name__}",
+        "FlaxAutoModelForCausalLM": f"modelling_flax_{config.model_type}.{type(model_to_save).__name__}"
+    }
+
     tokenizer.save_pretrained(output_dir)
     config.save_pretrained(output_dir)
 

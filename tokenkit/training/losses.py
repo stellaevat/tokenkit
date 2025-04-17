@@ -10,7 +10,7 @@ from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from tokenkit import baseline_utils, utils
-
+from tokenkit.models import param
 
 def get_last_index_per_column(matrix):
     matrix_last_only = (
@@ -94,7 +94,7 @@ def compute_alm_latents_loss(args, loss_args, epsilon=1e-8):
     elif "all_hidden_states" in args.latents_to_align:
         layer_indices = [
             (i, i + args.n_prefix_layers)
-            for i in range(utils.get_num_layers(loss_args.new_config) + 1)
+            for i in range(param.get_num_layers(loss_args.new_config) + 1)
         ]  # +1 for embeddings
     else:
         layer_indices = []

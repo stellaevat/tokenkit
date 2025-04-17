@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
-from transformers import AutoConfig, FlaxAutoModelForCausalLM
+from transformers import FlaxAutoModelForCausalLM
 from transformers.modeling_flax_outputs import FlaxCausalLMOutput
 import torch
 from flax.training import train_state, common_utils
-from flax import traverse_util, serialization
+from flax import traverse_util
 import wandb
 import os
 import logging
@@ -20,7 +20,8 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 import time
 
 from tokenkit import utils, data, eval, parse_args
-from tokenkit.training import losses, opt, lr, collators, checkpoint
+from tokenkit.hf import get_config
+from tokenkit.training import losses, opt, lr, collators, checkpoint, multitask
 from tokenkit.utils import tqdm
 from tokenkit.models import param, sharding
 from tokenkit.models.hypernet import Hypernet
@@ -268,8 +269,8 @@ def main(args: TrainZettHnArgs):
     output_dir = Path(args.output)
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    teacher_config = AutoConfig.from_pretrained(**asdict(args.model))
-    student_config = AutoConfig.from_pretrained(**asdict(args.model))
+    teacher_config = get_config(**asdict(args.model))
+    student_config = get_config(**asdict(args.model))
     dtype = getattr(jnp, args.dtype)
 
     dataset = data.get_dataset(**asdict(args.data), seed=args.seed)
@@ -504,6 +505,28 @@ def main(args: TrainZettHnArgs):
         }
         return new_state, metrics
 
+    def compute_lexical_loss(predicted_embeddings, target_surface_forms, source_embeddings, epsilon=1e-8):
+        lexical_overlap_mask = (
+            target_surface_forms[:, 1:] == hn_tokenizer.pad_token_id
+        ).all(axis=1)
+        target_embeddings = source_embeddings[target_surface_forms[:, 0]]
+
+        def distance_fn(x, y):
+            return jnp.square(x - y).sum(axis=-1)
+
+        # shape: [n_vocab, n_embeddings]
+        lexical_loss = (
+            distance_fn(predicted_embeddings, target_embeddings)
+            * lexical_overlap_mask[:, None]
+        )
+        # shape: [n_embeddings]
+        lexical_loss = (
+            lexical_loss.mean(axis=0)
+            / (lexical_overlap_mask.mean() + epsilon)
+            / (jnp.linalg.norm(target_embeddings, axis=-1).mean(0) + epsilon)
+        )
+        return lexical_loss.mean(), lexical_overlap_mask.mean()
+
     def train_step(state, batch):
         target_surface_forms = batch["target_surface_forms"]
         target_priors = batch["target_priors"]
@@ -622,28 +645,7 @@ def main(args: TrainZettHnArgs):
                 elif loss == "baseline_uld":
                     current_loss = losses.compute_baseline_uld_loss(args, loss_args)
                 elif loss == "lexical":
-                    lexical_overlap_mask = (
-                        target_surface_forms[:, 1:] == hn_tokenizer.pad_token_id
-                    ).all(axis=1)
-                    target_embeddings = source_embeddings[target_surface_forms[:, 0]]
-
-                    def distance_fn(x, y):
-                        return jnp.square(x - y).sum(axis=-1)
-
-                    # shape: [n_vocab, n_embeddings]
-                    lexical_loss = (
-                        distance_fn(predicted_embeddings, target_embeddings)
-                        * lexical_overlap_mask[:, None]
-                    )
-                    # shape: [n_embeddings]
-                    lexical_loss = (
-                        lexical_loss.mean(axis=0)
-                        / (lexical_overlap_mask.mean() + epsilon)
-                        / (jnp.linalg.norm(target_embeddings, axis=-1).mean(0) + epsilon)
-                    )
-                    scalar_report["mean_lexical_overlap"] = lexical_overlap_mask.mean()
-                    # shape: []
-                    current_loss = lexical_loss.mean()
+                    current_loss, _ = compute_lexical_loss(predicted_embeddings, target_surface_forms, source_embeddings)
                 else:
                     raise ValueError(f"Invalid loss: {loss}")
 
@@ -677,10 +679,24 @@ def main(args: TrainZettHnArgs):
                 scalar_report[f"loss/{loss}"] = current_loss
                 scalar_report[f"loss/{loss}_weight"] = weight
 
+            # report lexical loss & overlap (regardless of whether it's minimized or not)
+            lexical_loss, lexical_overlap = compute_lexical_loss(predicted_embeddings, target_surface_forms, source_embeddings)
+            scalar_report["loss/lexical"] = lexical_loss
+            scalar_report["loss/lexical_overlap"] = lexical_overlap
+
             return loss_values, scalar_report
 
         trainable_params = jax.tree.map(
             lambda x, m: x if m else None, state.params, train_mask
+        )
+        # last layer is usually not trainable (at least training not impl at the moment)
+        # here, a question arises: should we just approx. the gradient using all (potentially trainable) layers?
+        # this might give a different (more or less stable?) estimate also in the case of LoRA.
+        # should investigate more, make this an option, and gain some intuition on the difference.
+        last_layer_params = jax.tree.map(
+            lambda x, m: x if m else None,
+            state.params,
+            param.get_layer_n_mask(state.params, student_config, -1),
         )
 
         if args.multitask_aggregation_fn is None:
@@ -693,9 +709,46 @@ def main(args: TrainZettHnArgs):
             (loss, scalar_report), grad = grad_fn(
                 state.params, trainable_params
             )
+        elif args.multitask_aggregation_fn in {"approx_gradmag", "approx_gradmag_preserve_mag"}:
+            jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=1)
+            (last_layer_grads, _) = jac_fn(
+                state.params, last_layer_params, trainable_params
+            )
+            approx_grad_norm = multitask.compute_global_grad_norm(last_layer_grads)
+            # stop grad is not necessary here since the var is defined outside compute_loss_weighted, but added for clarity
+            approx_loss_weights = jax.lax.stop_gradient(multitask.compute_inv_global_grad_norm(last_layer_grads))
+
+            if args.multitask_aggregation_fn == "approx_gradmag_preserve_mag":
+                denominator = jnp.sum(approx_loss_weights)
+            else:
+                denominator = 1.0
+
+            last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0) / denominator, multitask.gradmag(last_layer_grads))
+
+            def compute_loss_weighted(*pargs):
+                loss_values, scalar_report = compute_loss(*pargs)
+                return jnp.sum(loss_values * approx_loss_weights) / denominator, scalar_report
+
+            grad_fn = jax.value_and_grad(
+                compute_loss_weighted, has_aux=True, argnums=2
+            )
+            (loss, scalar_report), non_last_layer_grad = grad_fn(
+                state.params, last_layer_params, trainable_params
+            )
+
+            for loss_idx, loss_name in enumerate(args.losses):
+                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[loss_idx]
+                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = approx_loss_weights[loss_idx]
+
+            grad = jax.tree.map(
+                lambda x, y: x if x is not None else y,
+                last_layer_grad,
+                non_last_layer_grad,
+                is_leaf=lambda x: x is None,
+            )
         else:
-            raise NotImplementedError()#
-        
+            raise NotImplementedError()
+
         grad = jax.tree.map(
             lambda g, p: g if g is not None else jnp.zeros_like(p),
             grad,

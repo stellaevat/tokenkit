@@ -16,8 +16,10 @@ def get_input_embedding_path(model_type):
         "xglm": "model.embed_tokens.embedding",
         "mistral": "model.embed_tokens.embedding",
         "llama": "model.embed_tokens.embedding",
+        "tpu_llama": "model.embed_tokens.embedding",
         "gemma": "model.embed_tokens.embedding",
         "gemma2": "model.embed_tokens.embedding",
+        "tpu_gemma2": "model.embed_tokens.embedding",
     }[model_type]
 
 
@@ -29,8 +31,10 @@ def get_output_embedding_path(model_type):
         "xglm": None,
         "mistral": "lm_head.kernel",
         "llama": "lm_head.kernel",
+        "tpu_llama": "lm_head.kernel",
         "gemma": "lm_head.kernel",
         "gemma2": "lm_head.kernel",
+        "tpu_gemma2": "lm_head.kernel",
     }[model_type]
 
 
@@ -39,6 +43,8 @@ def get_layer_path(model_type):
         "gemma2": "model.layers",
         "gpt2": "transformer.h",
         "llama": "model.layers",
+        "tpu_llama": "model.layers",
+        "tpu_gemma2": "model.layers",
     }[model_type]
 
 

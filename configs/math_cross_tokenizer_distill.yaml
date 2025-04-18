@@ -9,6 +9,7 @@ eval_interval: 5000
 save_interval: 5000
 losses: [alm_unbiased]
 target_tokenizer_name: google/gemma-2-2b-it:source=Gemma2
+tokens_to_add: [<|start_header_id|>,<|end_header_id|>,<|eot_id|>,<|eom_id|>,<|python_tag|>]
 
 train_model_mode: "lora"
 model_lora_rank: 64

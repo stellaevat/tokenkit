@@ -1156,7 +1156,7 @@ def main(args: CrossTokenizerDistillArgs):
     start_time = time.time()
 
     upload_executor = None
-    upload_name = args.name + "_" + datetime.now().strftime("%Y%m%d%H%M%S")
+    upload_name = datetime.now().strftime("%Y%m%d%H%M%S") + "_" + args.name
 
     grad_acc_steps = (
         args.optimizer.grad_acc_steps

@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 
 
 def log(data, step, **kwargs):
+    # wandb does not support nested panels, so replace all except the last / with a _
+    def replace_slashes(key):
+        if "/" in key:
+            parts = key.split("/")
+            return "_".join(parts[:-1]) + "/" + parts[-1]
+        return key
+
+    data = {replace_slashes(k): v for k, v in data.items()}
     logger.info(pformat({**data, "_step": step}))
     if jax.process_index() == 0:
         wandb.log(data, step=step, **kwargs)
@@ -83,7 +91,10 @@ def get_space_mask(tokenizer, space_mask_mode):
 
 
 def get_expand_input_ids_matrix(
-    tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH, module=np
+    tokenizer,
+    expand_input_ids_vocab,
+    max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH,
+    module=np,
 ):
     expansion_data = []
     expansion_indices = []
@@ -96,7 +107,10 @@ def get_expand_input_ids_matrix(
         else:
             indices = [
                 # unsafe=True is OK because `tokenizer` must be byte-converted via conversion=byte, and thus has the correct vocab
-                x + 1 for x in tokenizer.convert_tokens_to_ids(tokenizer.backend_tokenize(key, unsafe=True))
+                x + 1
+                for x in tokenizer.convert_tokens_to_ids(
+                    tokenizer.backend_tokenize(key, unsafe=True)
+                )
             ][::-1][:max_length]
         while len(indices) < max_length:
             indices.append(0)
@@ -112,14 +126,22 @@ def get_expand_input_ids_matrix(
         module.array(expansion_indices, dtype=module.int32),
     )
 
+
 def get_expand_input_ids_dict(
     tokenizer, expand_input_ids_vocab, max_length=constants.EXPAND_INPUT_IDS_MAX_LENGTH
 ):
-    expansion_data, expansion_indices = get_expand_input_ids_matrix(tokenizer, expand_input_ids_vocab, max_length)
+    expansion_data, expansion_indices = get_expand_input_ids_matrix(
+        tokenizer, expand_input_ids_vocab, max_length
+    )
 
-    return ({
-        tuple(i for i in indices if i != 0): data for indices, data in zip(expansion_indices, expansion_data)
-    }, set(tokenizer.all_special_ids))
+    return (
+        {
+            tuple(i for i in indices if i != 0): data
+            for indices, data in zip(expansion_indices, expansion_data)
+        },
+        set(tokenizer.all_special_ids),
+    )
+
 
 def np_expand_input_ids(
     input_ids,
@@ -141,14 +163,21 @@ def np_expand_input_ids(
                 continue
 
             if last_maxlen_ids[0] in expand_input_ids_dict[1]:
-                expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][(last_maxlen_ids[0],)] - 1
+                expanded_input_ids[example_idx][i] = (
+                    expand_input_ids_dict[0][(last_maxlen_ids[0],)] - 1
+                )
             else:
                 found = False
                 last_maxlen_up_to = len(last_maxlen_ids)
 
                 while not found and last_maxlen_up_to > 0:
                     try:
-                        expanded_input_ids[example_idx][i] = expand_input_ids_dict[0][tuple(last_maxlen_ids[:last_maxlen_up_to])] - 1
+                        expanded_input_ids[example_idx][i] = (
+                            expand_input_ids_dict[0][
+                                tuple(last_maxlen_ids[:last_maxlen_up_to])
+                            ]
+                            - 1
+                        )
                         found = True
                     except KeyError:
                         last_maxlen_up_to -= 1
@@ -238,7 +267,9 @@ def fvt(
             one_to_one_special_tokens_map[v2[0]] = v1[0]
             logger.info(f"Copying special token {v1[0]} -> {v2[0]}")
         elif v2 is not None:
-            logger.warning(f"Special token {k} has no replacements in source tokenizer: {v1}. Not copying special token embedding.")
+            logger.warning(
+                f"Special token {k} has no replacements in source tokenizer: {v1}. Not copying special token embedding."
+            )
 
     for i in tqdm(
         range(len(target_tokenizer)), desc="Applying FVT..", disable=not verbose
@@ -247,7 +278,9 @@ def fvt(
 
         if token in one_to_one_special_tokens_map:
             stats["special_token_exact_match"] += 1
-            original_to_new_indices[i] = source_vocab[one_to_one_special_tokens_map[token]]
+            original_to_new_indices[i] = source_vocab[
+                one_to_one_special_tokens_map[token]
+            ]
         elif (
             token in source_vocab
             and source_vocab[token] < len(source_embeddings)
@@ -389,7 +422,11 @@ def param_report(params, train_mask):
 
 
 def get_surface_form_matrix(
-    tokenizer_or_tokens, maxlen, hn_tokenizer: ByteifyTokenizer, padding=0, verbose=False
+    tokenizer_or_tokens,
+    maxlen,
+    hn_tokenizer: ByteifyTokenizer,
+    padding=0,
+    verbose=False,
 ):
     # tokens are expected to be byte encoded
     if isinstance(tokenizer_or_tokens, list):
@@ -460,6 +497,7 @@ def preprocess_prompt(prompt, chat_template_mode):
 
     return prompt
 
+
 def encode_prompt(prompt, tokenizer, max_length=None):
     token_ids = []
     regular_token_indices = []
@@ -471,11 +509,19 @@ def encode_prompt(prompt, tokenizer, max_length=None):
 
     def process_chunk(chunk):
         if chunk in tokenizer.added_tokens_encoder:
-            token_ids.append(tokenizer.convert_tokens_to_ids(tokenizer.model_kind_cls.byte_fallback_fn(chunk)))
+            token_ids.append(
+                tokenizer.convert_tokens_to_ids(
+                    tokenizer.model_kind_cls.byte_fallback_fn(chunk)
+                )
+            )
             regular_token_indices.append(-1)
         elif chunk in tokenizer.model_kind_cls.replacements:
             if tokenizer.model_kind_cls.replacements[chunk] is not None:
-                token_ids.extend(tokenizer.convert_tokens_to_ids(tokenizer.model_kind_cls.replacements[chunk]))
+                token_ids.extend(
+                    tokenizer.convert_tokens_to_ids(
+                        tokenizer.model_kind_cls.replacements[chunk]
+                    )
+                )
                 regular_token_indices.extend(
                     [-1] * len(tokenizer.model_kind_cls.replacements[chunk])
                 )
@@ -679,12 +725,20 @@ def test_encode_prompt(tokenizer_name):
 
 def test_expand_input_ids():
     tokenizer = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2")
-    byte_tokenizer = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2:conversion=byte")
+    byte_tokenizer = load_byteify_tokenizer(
+        "google/gemma-2-2b-it:source=Gemma2:conversion=byte"
+    )
 
     expand_vocab = tokenizer.get_vocab()
 
-    byte_input_ids = np.array([byte_tokenizer.encode("Hello, world! How are you today?")])
-    expanded_input_ids_np = np_expand_input_ids(byte_input_ids, get_expand_input_ids_dict(byte_tokenizer, expand_vocab))
-    expanded_input_ids_jax = jax_expand_input_ids(byte_input_ids, get_expand_input_ids_matrix(byte_tokenizer, expand_vocab))
+    byte_input_ids = np.array(
+        [byte_tokenizer.encode("Hello, world! How are you today?")]
+    )
+    expanded_input_ids_np = np_expand_input_ids(
+        byte_input_ids, get_expand_input_ids_dict(byte_tokenizer, expand_vocab)
+    )
+    expanded_input_ids_jax = jax_expand_input_ids(
+        byte_input_ids, get_expand_input_ids_matrix(byte_tokenizer, expand_vocab)
+    )
 
     assert np.all(expanded_input_ids_np == expanded_input_ids_jax)

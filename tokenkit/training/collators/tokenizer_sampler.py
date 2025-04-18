@@ -3,6 +3,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 import tokenizers
 from tokenizers import models, pre_tokenizers, decoders, normalizers, Tokenizer
 import copy
+from jax.sharding import PartitionSpec as P
 
 from tokenkit import utils, constants, align
 from tokenkit.byteify import ByteifyTokenizer
@@ -172,7 +173,6 @@ class TokenizerSamplerCollator:
                 encodings["input_ids_original"] = original_encodings["input_ids"]
                 encodings["attention_mask_original"] = original_encodings["attention_mask"]
                 encodings["loss_mask_original"] = original_encodings["attention_mask"].astype(bool)
-                encodings["labels_original"] = original_encodings["input_ids"].copy()
 
         input_ids = encodings["input_ids"]
 
@@ -337,7 +337,7 @@ class TokenizerSamplerCollator:
         encodings["attention_mask_new"] = encodings.pop("attention_mask")
         encodings["loss_mask_new"] = encodings["attention_mask_new"].astype(bool)
         if "token_type_ids" in encodings:
-            encodings["token_type_ids_new"] = encodings.pop("token_type_ids")
+            del encodings["token_type_ids"] # NOTE: not supported for now
 
         return encodings
 
@@ -544,3 +544,32 @@ class TokenizerSamplerCollator:
         encodings["lang_index"] = np.array(0) # TODO: fix
 
         return encodings
+
+    def get_batch_pspecs(self):
+        batch_specs = {
+            "target_surface_forms": P("model", None),
+            "target_priors": P("model"),
+            "ids_to_embed": P("model"),
+            "mask": P("model"),
+            "space_mask": P("model"),
+            "input_ids_new": P("data", None),
+            "attention_mask_new": P("data", None),
+            "loss_mask_new": P("data", None),
+            "special_indices": P(None),
+            "special_indices_in_reference": P(None),
+            "lang_index": P(),
+            "byte_lengths": P(None),
+        }
+
+        if self.with_alignments:
+            batch_specs.update({
+                "alignment_matrix_a_unconstrained": P("data", None),
+                "alignment_matrix_b_unconstrained": P("data", None),
+                "alignment_matrix_a_space": P("data", None),
+                "alignment_matrix_b_space": P("data", None),
+                "input_ids_original": P("data", None),
+                "attention_mask_original": P("data", None),
+                "loss_mask_original": P("data", None),
+            })
+
+        return batch_specs

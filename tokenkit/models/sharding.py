@@ -104,17 +104,6 @@ SHARD_PATTERNS = {
         "(opt_state|params).*output.dense.kernel": P("model", None),
         "(opt_state|params).*intermediate.dense.kernel": P(None, "model"),
     },
-    "batch": {  # TODO: update, check if this is correct / makes a difference
-        "target_surface_forms": P("model", None),
-        "target_priors": P("model"),
-        "mask": P("model"),
-        "space_mask": P("model"),
-        "ids_to_embed": P("model"),
-        "input_ids": P("model", None),
-        "attention_mask": P("model", None),
-        "original_input_ids": P("model", None),
-        "original_attention_mask": P("model", None),
-    },
 }
 SHARD_PATTERNS["tpu_llama"] = SHARD_PATTERNS["llama"]
 SHARD_PATTERNS["tpu_gemma2"] = SHARD_PATTERNS["gemma2"]

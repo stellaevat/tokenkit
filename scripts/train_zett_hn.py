@@ -1,9 +1,11 @@
 import jax
 import jax.numpy as jnp
+from jax.sharding import PartitionSpec as P, NamedSharding
 from jax.experimental import multihost_utils
 from transformers import FlaxAutoModelForCausalLM
 from transformers.modeling_flax_outputs import FlaxCausalLMOutput
 import torch
+import sys
 from flax.training import train_state, common_utils
 from flax import traverse_util
 import wandb
@@ -145,6 +147,7 @@ def get_last_index_per_column(matrix):
 
 def predict_embeddings(
     hypernet_fn,
+    mesh,
     n_vocab,
     hypernet_params,
     surface_forms,
@@ -167,6 +170,10 @@ def predict_embeddings(
             jnp.take(source_embeddings, main_ids, axis=0),
         )
 
+    embeddings_to_compose = jax.lax.with_sharding_constraint(
+        embeddings_to_compose, NamedSharding(mesh, P("model", None, "data"))
+    )
+
     predicted_embeddings = hypernet_fn(
         hypernet_params,
         embeddings_to_compose,
@@ -180,7 +187,9 @@ def predict_embeddings(
             source_embeddings[special_indices_in_reference]
         )
 
-    return predicted_embeddings
+    return jax.lax.with_sharding_constraint(
+        predicted_embeddings, NamedSharding(mesh, P("model", None, "data"))
+    )
 
 
 def assign_embeddings(model_params, embeddings, config):
@@ -216,6 +225,7 @@ def compute_embeddings_and_out(
 ):
     predicted_embeddings = predict_embeddings(
         hypernet_fn,
+        model.config.mesh,
         original_n_vocab,
         params["hypernet"],
         surface_forms,
@@ -304,8 +314,18 @@ def main(args: TrainZettHnArgs):
     student_config.mesh = mesh
 
     # TODO: add MLM support
-    teacher_model = FlaxAutoModelForCausalLM.from_config(teacher_config, dtype=dtype, _do_init=False)
-    student_model = FlaxAutoModelForCausalLM.from_config(student_config, dtype=dtype, _do_init=False)
+    teacher_model = FlaxAutoModelForCausalLM.from_config(
+        teacher_config,
+        dtype=dtype,
+        _do_init=False,
+        input_shape=(args.n_data_parallel, args.collator.block_size),
+    )
+    student_model = FlaxAutoModelForCausalLM.from_config(
+        student_config,
+        dtype=dtype,
+        _do_init=False,
+        input_shape=(args.n_data_parallel, args.collator.block_size),
+    )
     model_params = param.load_params(**model_kwargs)
 
     n_embd = param.get(
@@ -484,6 +504,7 @@ def main(args: TrainZettHnArgs):
 
             predicted_embeddings = predict_embeddings(
                 state.apply_fn,
+                mesh,
                 state.original_n_vocab,
                 params["hypernet"],
                 surface_forms,
@@ -581,7 +602,7 @@ def main(args: TrainZettHnArgs):
                 teacher_out = teacher_model(
                     input_ids=batch["input_ids_original"],
                     params=assign_embeddings(
-                        params["model"], source_embeddings, teacher_config
+                        state.params["model"], source_embeddings, teacher_config
                     ),
                     dropout_rng=None,
                     output_hidden_states=True,
@@ -747,7 +768,7 @@ def main(args: TrainZettHnArgs):
 
             for loss_idx, loss_name in enumerate(args.losses):
                 scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[loss_idx]
-                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = approx_loss_weights[loss_idx]
+                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = approx_loss_weights[loss_idx] / denominator
 
             grad = jax.tree.map(
                 lambda x, y: x if x is not None else y,
@@ -829,6 +850,9 @@ def main(args: TrainZettHnArgs):
         original_tokenizer=original_tokenizer,
         space_mask_mode=args.space_mask_mode,
     )
+    batch_shardings = jax.tree.map(
+        lambda x: NamedSharding(mesh, x), collator.get_batch_pspecs()
+    )
 
     eval_tokenizers = []
 
@@ -864,6 +888,7 @@ def main(args: TrainZettHnArgs):
         )
 
     if args.identity_steps > 0:
+        # TODO: fix / update
         identity_collator_args = copy.deepcopy(args.collator)
         identity_collator_args.do_tokenizer_sampling = False
         identity_collator_args.hn_surface_maxlen = 1
@@ -887,8 +912,12 @@ def main(args: TrainZettHnArgs):
             batch_size=1,  # batched internally
             collate_fn=partial(identity_collator, for_identity_step=True),
         )
+        identity_batch_shardings = jax.tree.map(
+            lambda x: NamedSharding(mesh, x), identity_collator.get_batch_pspecs()
+        )
     else:
         identity_train_dataloader = None
+        identity_batch_shardings = None
 
     train_dataloader = StatefulDataLoader(
         dataset.get_torch_dataset(),
@@ -923,15 +952,8 @@ def main(args: TrainZettHnArgs):
     diter = iter(train_dataloader)
     first_batch = track_metrics(next(diter))
 
-    batch_shardings = sharding.get_sharding_fn(
-        sharding.get_shard_patterns("batch"), mesh
-    )(first_batch)
-
     if args.identity_steps > 0:
         first_identity_batch = track_metrics(next(identity_diter))
-        identity_batch_shardings = sharding.get_sharding_fn(
-            sharding.get_shard_patterns("batch"), mesh
-        )(first_identity_batch)
 
         jidentity_train_step = jax.jit(
             identity_train_step,
@@ -967,7 +989,7 @@ def main(args: TrainZettHnArgs):
             None,  # special_indices
             None,  # special_indices_in_reference
         ),
-        static_argnums=(0,),
+        static_argnums=(0, 1),
         out_shardings=state_shardings.params["embeddings"],  # predicted_embeddings
     )
 
@@ -984,6 +1006,19 @@ def main(args: TrainZettHnArgs):
 
         eval_metrics = jax.tree.map(np.mean, common_utils.stack_forest(eval_metrics))
         return eval_metrics
+
+    if args.do_cost_analysis:
+        compiled_train_step_fn = jtrain_step.lower(
+            state, first_batch
+        ).compile()
+        flops_per_step = compiled_train_step_fn.cost_analysis()["flops"]
+        memory_per_step = (
+            compiled_train_step_fn.memory_analysis().output_size_in_bytes
+            + compiled_train_step_fn.memory_analysis().temp_size_in_bytes
+        )
+        logger.info("TFLOPs per step:", flops_per_step / (10**12))
+        logger.info("Memory (MB) per step:", memory_per_step / (1024**2))
+        sys.exit()
 
     train_metrics = []
     start_time = time.time()
@@ -1054,6 +1089,7 @@ def main(args: TrainZettHnArgs):
                 predicted_embeddings = jpredict_embeddings(
                     # TODO: pass state?
                     state.apply_fn,
+                    mesh,
                     state.original_n_vocab,
                     state.params["hypernet"],
                     sharding.to_global_array(

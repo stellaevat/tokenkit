@@ -75,7 +75,7 @@ class Generator:
     ):
         position_ids = (jnp.cumsum(attention_mask, axis=1) - 1) * attention_mask
 
-        inputs_embeds = self.compute_inputs_embeds(input_ids, expanded_input_ids)
+        inputs_embeds = self.compute_inputs_embeds(params, input_ids, expanded_input_ids)
 
         out = model_fn(
             input_ids=None,
@@ -312,10 +312,10 @@ class Generator:
         )
 
     def compute_inputs_embeds(
-        self, input_ids, expanded_input_ids=None, last_only=False
+        self, params, input_ids, expanded_input_ids=None, last_only=False
     ):
         embedding_matrix = param.get(
-            self.params,
+            params,
             param.get_input_embedding_path(self.config.model_type),
         )
 
@@ -344,7 +344,7 @@ class Generator:
         self,
         state: State,
     ):
-        inputs_embeds = self.compute_inputs_embeds(state.running_token, last_only=True)
+        inputs_embeds = self.compute_inputs_embeds(state.params, state.running_token, last_only=True)
 
         out = self.generate_fn(
             input_ids=None,

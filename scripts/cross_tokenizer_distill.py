@@ -61,7 +61,7 @@ class CrossTokenizerDistillArgs:
     eval_interval: int
     save_interval: int
     target_tokenizer_name: str
-    data: parse_args.DataArgs
+    data: dict[str, Any]
     hypernet: parse_args.HypernetArgs
     optimizer: parse_args.OptimizerArgs
     eval: parse_args.EvalArgs
@@ -112,7 +112,7 @@ class CrossTokenizerDistillArgs:
     tokenizer_pair_bias_threshold_side_path: str | None = None
     expand_input_ids: bool = False
     export_to_gcs_bucket: str | None = None
-    ppl_eval_data: parse_args.DataArgs | None = None
+    ppl_eval_data: dict[str, Any] | None = None
 
 
 class TrainState(train_state.TrainState):
@@ -428,9 +428,9 @@ def main(args: CrossTokenizerDistillArgs):
     dtype = getattr(jnp, args.dtype)
 
     # prepare dataset
-    dataset = data.get_dataset(**asdict(args.data), seed=args.seed)
+    dataset = data.get_dataset(**args.data, seed=args.seed)
     if args.ppl_eval_data is not None:
-        ppl_eval_data = data.get_dataset(**asdict(args.ppl_eval_data), seed=args.seed)
+        ppl_eval_data = data.get_dataset(**args.ppl_eval_data, seed=args.seed)
     else:
         ppl_eval_data = None
 
@@ -447,7 +447,7 @@ def main(args: CrossTokenizerDistillArgs):
     target_tokenizer = load_byteify_tokenizer(target_tokenizer_name)
 
     if args.tokens_to_add is not None:
-        logger.info("Adding tokens:", args.tokens_to_add)
+        logger.info("Adding tokens: %s", args.tokens_to_add)
         target_tokenizer.add_tokens(args.tokens_to_add)
 
     if "baseline_mined" in args.losses or (
@@ -1163,8 +1163,8 @@ def main(args: CrossTokenizerDistillArgs):
         if args.optimizer.grad_acc_steps is not None
         else 1
     )
-    assert args.data.batch_size % grad_acc_steps == 0
-    local_batch_size = args.data.batch_size // grad_acc_steps
+    assert args.data["batch_size"] % grad_acc_steps == 0
+    local_batch_size = args.data["batch_size"] // grad_acc_steps
 
     for step in tqdm(range(args.steps)):
         try:
@@ -1187,7 +1187,7 @@ def main(args: CrossTokenizerDistillArgs):
                 )
 
                 def split_local(arr):
-                    if arr.shape[0] == args.data.batch_size:
+                    if arr.shape[0] == args.data["batch_size"]:
                         return arr[start:end]
                     else:
                         assert len(arr.shape) == 1  # otherwise ambiguous

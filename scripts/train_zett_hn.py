@@ -83,7 +83,7 @@ class TrainZettHnArgs:
     eval_interval: int
     save_interval: int
     collator: TokenizerSamplerCollatorArgs
-    data: parse_args.DataArgs
+    data: dict[str, Any]
     hypernet: parse_args.HypernetArgs
     optimizer: parse_args.OptimizerArgs
     eval: HnEvalArgs
@@ -131,7 +131,7 @@ class TrainZettHnArgs:
     tokenizer_pair_bias_threshold_side_path: str | None = None
     expand_input_ids: bool = False
     export_to_gcs_bucket: str | None = None
-    ppl_eval_data: parse_args.DataArgs | None = None
+    ppl_eval_data: dict[str, Any] | None = None
     # hn specific
     identity_steps: int = 0
     identity_lr: float = 3e-4
@@ -292,9 +292,9 @@ def main(args: TrainZettHnArgs):
     student_config = get_config(**asdict(args.model))
     dtype = getattr(jnp, args.dtype)
 
-    dataset = data.get_dataset(**asdict(args.data), seed=args.seed)
+    dataset = data.get_dataset(**args.data, seed=args.seed)
     if args.ppl_eval_data is not None:
-        ppl_eval_data = data.get_dataset(**asdict(args.ppl_eval_data), seed=args.seed)
+        ppl_eval_data = data.get_dataset(**args.ppl_eval_data, seed=args.seed)
     else:
         ppl_eval_data = None
 
@@ -843,7 +843,7 @@ def main(args: TrainZettHnArgs):
     collator = collators.TokenizerSamplerCollator(
         hn_tokenizer,
         args.collator,
-        batch_size=args.data.batch_size,
+        batch_size=args.data["batch_size"],
         initial_texts=initial_texts,  # TODO: impl !mix_languages
         with_consistent_whitespace=False,
         with_alignments=True,

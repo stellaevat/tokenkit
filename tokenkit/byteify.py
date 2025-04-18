@@ -120,6 +120,25 @@ def to_byte_level_tokenizer(
 
 
 class ByteifyTokenizer:
+    def _init_vocab(self):
+        self.vocab = {}
+        self.precedences = {
+            v: self.model_kind_cls.byte_fallback_precedence_fn(k)
+            for k, v in self.tokenizer.vocab.items()
+        }
+        self.inv_vocab = {}
+
+        for k, v in self.tokenizer.vocab.items():
+            byte_k = self.model_kind_cls.byte_fallback_fn(k)
+            # prioritize overlapping byte tokens via precedences (necessary e.g. for SentencePiece byte fallback)
+            if (
+                byte_k not in self.vocab
+                or self.precedences[v] > self.precedences[self.vocab[byte_k]]
+            ):
+                self.vocab[byte_k] = v
+
+            self.inv_vocab[v] = byte_k
+
     def __init__(
         self, tokenizer: PreTrainedTokenizerFast, model_kind_cls: BaseModelKind, manual_add_prefix_space: bool = False
     ):
@@ -158,24 +177,7 @@ class ByteifyTokenizer:
                 setattr(self.tokenizer, special_token, token_value[0])
 
         self.tokenizer.padding_side = "right"
-
-        self.vocab = {}
-        self.precedences = {
-            v: self.model_kind_cls.byte_fallback_precedence_fn(k)
-            for k, v in self.tokenizer.vocab.items()
-        }
-        self.inv_vocab = {}
-
-        for k, v in self.tokenizer.vocab.items():
-            byte_k = self.model_kind_cls.byte_fallback_fn(k)
-            # prioritize overlapping byte tokens via precedences (necessary e.g. for SentencePiece byte fallback)
-            if (
-                byte_k not in self.vocab
-                or self.precedences[v] > self.precedences[self.vocab[byte_k]]
-            ):
-                self.vocab[byte_k] = v
-
-            self.inv_vocab[v] = byte_k
+        self._init_vocab()
 
     def convert_ids_to_tokens(
         self, ids: Union[int, List[int]]
@@ -219,6 +221,7 @@ class ByteifyTokenizer:
 
     def add_tokens(self, tokens: List[str]):
         self.tokenizer.add_tokens(tokens)
+        self._init_vocab()
 
     def save_pretrained(self, *args, **kwargs):
         self.tokenizer.save_pretrained(*args, **kwargs)

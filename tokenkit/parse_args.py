@@ -5,16 +5,6 @@ import yaml
 
 
 @dataclass
-class DataArgs:
-    batch_size: int
-    num_workers: int
-    kind: str
-    mix_languages: bool
-    streaming: bool
-    dataset_configs: list[dict]
-    shuffle_buffer_size: int | str | None = None
-
-@dataclass
 class HypernetArgs:
     architecture: str
     num_layers: int
@@ -94,7 +84,7 @@ def parse_args(cls):
 
     (args,) = HfArgumentParser([cls]).parse_yaml_file(meta_args.config)
 
-    for overrides in meta_args.overrides:
+    for overrides in (meta_args.overrides or []):
         for override in overrides.split():
             first_equals = override.find("=")
             key = override[:first_equals].split(".")

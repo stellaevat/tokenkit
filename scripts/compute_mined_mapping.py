@@ -1,18 +1,21 @@
 import json
 from pathlib import Path
 
-import hydra
 import numpy as np
-from omegaconf import DictConfig
+from dataclasses import dataclass
 
-from tokenkit import baseline_utils, utils
+from tokenkit import baseline_utils
 from tokenkit.byteify import load_byteify_tokenizer
+from tokenkit import parse_args
 
+@dataclass
+class ComputedMinedMappingArgs:
+    teacher_tokenizer_name: str
+    target_tokenizer_name: str
+    output: str
+    num_workers: int
 
-@hydra.main(
-    version_base=None, config_path="../configs", config_name="compute_mined_mapping"
-)
-def my_app(args: DictConfig) -> None:
+def main(args: ComputedMinedMappingArgs) -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -32,4 +35,4 @@ def my_app(args: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    my_app()
+    main(parse_args.parse_args(ComputedMinedMappingArgs))

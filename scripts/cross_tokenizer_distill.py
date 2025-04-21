@@ -63,7 +63,7 @@ class CrossTokenizerDistillArgs:
     target_tokenizer_name: str
     data: dict[str, Any]
     hypernet: parse_args.HypernetArgs
-    optimizer: parse_args.OptimizerArgs
+    optimizer: dict[str, Any]
     eval: parse_args.EvalArgs
     student: parse_args.ModelArgs
     teacher: parse_args.ModelArgs | None = None
@@ -582,7 +582,7 @@ def main(args: CrossTokenizerDistillArgs):
         **asdict(args.hypernet),
     )
 
-    optimizer_kwargs = asdict(args.optimizer)
+    optimizer_kwargs = args.optimizer
     learning_rate_fn = lr.linear_warmup_linear_decay_with_linear_prefix(
         optimizer_kwargs.pop("learning_rate"),
         args.steps,
@@ -1159,8 +1159,8 @@ def main(args: CrossTokenizerDistillArgs):
     upload_name = datetime.now().strftime("%Y%m%d%H%M%S") + "_" + args.name
 
     grad_acc_steps = (
-        args.optimizer.grad_acc_steps
-        if args.optimizer.grad_acc_steps is not None
+        args.optimizer["grad_acc_steps"]
+        if args.optimizer.get("grad_acc_steps") is not None
         else 1
     )
     assert args.data["batch_size"] % grad_acc_steps == 0

@@ -29,9 +29,6 @@ def get_optimizer(train_mask, learning_rate_fn, **optimizer_kwargs):
     grad_acc_steps = optimizer_kwargs.pop("grad_acc_steps", None)
     max_grad_norm = optimizer_kwargs.pop("max_grad_norm", None)
 
-    if max_grad_norm is not None:
-        transforms.append(optax.clip_by_global_norm(max_grad_norm))
-
     if opt_type == "adamw":
         opt_fn = optax.adamw
     else:
@@ -61,6 +58,19 @@ def get_optimizer(train_mask, learning_rate_fn, **optimizer_kwargs):
                         **optimizer_kwargs,
                     )
 
+    for key in optimizers.keys():
+        if key == "_do_not_train":
+            continue
+
+        if max_grad_norm is not None:
+            optimizers[key] = optax.chain(
+                optax.clip_by_global_norm(max_grad_norm),
+                optimizers[key],
+            )
+
+        if grad_acc_steps is not None and grad_acc_steps > 1:
+            optimizers[key] = optax.MultiSteps(opt=optimizers[key], every_k_schedule=grad_acc_steps)
+
     for key, trainable in flat_train_mask.items():
         if key not in flat_param_group_labels:
             if trainable:
@@ -77,16 +87,7 @@ def get_optimizer(train_mask, learning_rate_fn, **optimizer_kwargs):
         }
     )
 
-    opt_fn = optax.multi_transform(
+    return optax.multi_transform(
         optimizers,
         traverse_util.unflatten_dict(flat_param_group_labels),
     )
-
-    transforms.append(opt_fn)
-
-    opt = optax.chain(*transforms)
-
-    if grad_acc_steps is not None:
-        opt = optax.MultiSteps(opt=opt, every_k_schedule=grad_acc_steps)
-
-    return opt

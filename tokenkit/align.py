@@ -19,10 +19,10 @@ def _count_leading_whitespace(tokens: list[str]) -> int:
 def get_alignment_indices(
     tokens_teacher: list[str],
     tokens_student: list[str],
-    attention_mask_teacher: np.ndarray,
-    attention_mask_student: np.ndarray,
     tokenizer_teacher: ByteifyTokenizer,
     tokenizer_student: ByteifyTokenizer,
+    attention_mask_teacher: np.ndarray | None = None,
+    attention_mask_student: np.ndarray | None = None,
     check=True,
 ):
     replacements_teacher = {}
@@ -95,10 +95,10 @@ def get_alignment_indices(
         student_leading_whitespace_count += 1
 
     while i < len(tokens_teacher) or j < len(tokens_student):
-        if i < len(tokens_teacher) and not attention_mask_teacher[i]:
+        if i < len(tokens_teacher) and (attention_mask_teacher is not None and not attention_mask_teacher[i]):
             i += 1
             continue
-        if j < len(tokens_student) and not attention_mask_student[j]:
+        if j < len(tokens_student) and (attention_mask_student is not None and not attention_mask_student[j]):
             j += 1
             continue
 
@@ -229,10 +229,10 @@ def get_unconstrained_alignments(
         ) = get_alignment_indices(
             tokens_teacher,
             tokens_student,
-            attention_mask_teacher[example_index],
-            attention_mask_student[example_index],
             tokenizer_teacher,
             tokenizer_student,
+            attention_mask_teacher[example_index],
+            attention_mask_student[example_index],
         )
         teacher_mask = np.array([len(token) > 0 for token in normalized_tokens_teacher])
         student_mask = np.array([len(token) > 0 for token in normalized_tokens_student])
@@ -288,10 +288,10 @@ def get_space_alignments(
         ) = get_alignment_indices(
             tokens_teacher,
             tokens_student,
-            attention_mask_teacher[example_index],
-            attention_mask_student[example_index],
             tokenizer_teacher,
             tokenizer_student,
+            attention_mask_teacher[example_index],
+            attention_mask_student[example_index],
         )
         teacher_mask = np.array([len(token) > 0 for token in normalized_tokens_teacher])
         student_mask = np.array([len(token) > 0 for token in normalized_tokens_student])
@@ -382,10 +382,10 @@ def get_unbiased_alignments(
         ) = get_alignment_indices(
             tokens_teacher,
             tokens_student,
-            attention_mask_teacher[example_index],
-            attention_mask_student[example_index],
             tokenizer_teacher,
             tokenizer_student,
+            attention_mask_teacher[example_index],
+            attention_mask_student[example_index],
         )
         teacher_mask = np.array([len(token) > 0 for token in normalized_tokens_teacher])
         student_mask = np.array([len(token) > 0 for token in normalized_tokens_student])
@@ -431,10 +431,10 @@ def test_get_alignment_indices():
     idx, _, _, _, _ = get_alignment_indices(
         tokens_teacher,
         tokens_student,
-        attention_mask_teacher,
-        attention_mask_student,
         teacher_tokenizer,
         student_tokenizer,
+        attention_mask_teacher,
+        attention_mask_student,
     )
 
     assert tokens_teacher[idx[0][0] : idx[0][1]] == ["<|im_start|>"]

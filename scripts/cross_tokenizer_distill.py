@@ -191,7 +191,9 @@ def get_state(
         # we need a separate copy of the teacher parameters
         teacher_model_params = jax.tree.map(lambda x: x.astype(dtype), model_params)
     else:
-        logger.info("Using a single copy of the model parameters for the teacher and the student.")
+        logger.info(
+            "Using a single copy of the model parameters for the teacher and the student."
+        )
         # we can share the student and teacher parameters, indicated via empty teacher_model_params
         teacher_model_params = jnp.array([])
 
@@ -251,102 +253,91 @@ def get_state(
             seed=args.seed,
         )
 
-    def _jit_init_state(params):
-        params["hypernet"] = jax.jit(hypernet.init)(
+    # init the hypernetwork on CPU using a small subset of the embeddings
+    n_embed_init = 128
+    params["hypernet"] = jax.tree.map(
+        jax.device_get,
+        jax.jit(hypernet.init, backend="cpu")(
             jax.random.PRNGKey(args.seed),
-            params["new_embeddings"][:, None, :, :],
-            jnp.ones((params["new_embeddings"].shape[0], 1), dtype=bool),
-            jnp.arange(params["new_embeddings"].shape[0], dtype=jnp.int32),
-        )
+            params["new_embeddings"][:n_embed_init, None, :, :],
+            jnp.ones((n_embed_init, 1), dtype=bool),
+            jnp.arange(n_embed_init, dtype=jnp.int32),
+        ),
+    )
 
-        train_mask = utils.label_by_prefix(
-            params,
+    train_mask = utils.label_by_prefix(
+        params,
+        [
             [
-                [
-                    ("hypernet", "non_trainable"),
-                    False,
-                ],  # pax / praxis convention
-                [("hypernet",), True],
-                [
-                    ("teacher_model",),
-                    False,
-                ],
-                [
-                    ("teacher_embeddings",),
-                    False,
-                ],
-                [
-                    (
-                        "model",
-                        "original_embeddings",
-                    ),
-                    False,
-                ],
-                [
-                    "model.*(projector_query|projector_s2t|projector_t2s|projector_latents).*",
-                    True,
-                ],
-                [
-                    ("model", "expanded_input_ids_projection"),
-                    True,
-                ],
-                [
-                    ("model",),
-                    (True if args.train_model_mode == "full" else False),
-                ],
-                [
-                    ("model_lora",),
-                    True,
-                ],
-                [
-                    ("new_embeddings",),
-                    True if args.train_embeddings else False,
-                ],
-                [
-                    ("loss_weights",),
-                    True,
-                ],
+                ("hypernet", "non_trainable"),
+                False,
+            ],  # pax / praxis convention
+            [("hypernet",), True],
+            [
+                ("teacher_model",),
+                False,
             ],
-        )
+            [
+                ("teacher_embeddings",),
+                False,
+            ],
+            [
+                (
+                    "model",
+                    "original_embeddings",
+                ),
+                False,
+            ],
+            [
+                "model.*(projector_query|projector_s2t|projector_t2s|projector_latents).*",
+                True,
+            ],
+            [
+                ("model", "expanded_input_ids_projection"),
+                True,
+            ],
+            [
+                ("model",),
+                (True if args.train_model_mode == "full" else False),
+            ],
+            [
+                ("model_lora",),
+                True,
+            ],
+            [
+                ("new_embeddings",),
+                True if args.train_embeddings else False,
+            ],
+        ],
+    )
+    params = jax.tree.map(
+        lambda x, trainable: (x.astype(jnp.float32) if trainable else x.astype(dtype)),
+        params,
+        train_mask,
+    )
 
-        params = jax.tree.map(
-            # TODO: do we need to keep any specific params in fp32, e.g LayerNorm?
-            lambda x, trainable: (
-                x.astype(jnp.float32) if trainable else x.astype(dtype)
-            ),
-            params,
-            train_mask,
-        )
-
+    def _jit_init_state(params):
         return TrainState.create(
             apply_fn=_unimplemented_apply_fn,
             params=params,
+            tx=opt.get_optimizer(train_mask, learning_rate_fn, **optimizer_kwargs),
             logit_mask_teacher=logit_mask_teacher,
             logit_mask_new=logit_mask_new,
             train_mask=train_mask,
-            tx=opt.get_optimizer(train_mask, learning_rate_fn, **optimizer_kwargs),
             space_mask_teacher=space_mask_teacher,
             space_mask_new=space_mask_new,
         )
 
     state_shape = jax.eval_shape(_jit_init_state, params)
-    state_shardings = sharding.get_sharding_fn(shard_patterns, student_config.mesh)(
-        state_shape
-    )
-    in_shardings = state_shardings.params.copy()
-    del in_shardings["hypernet"]  # initialized in jit
+    state_shardings = sharding.get_sharding_fn(shard_patterns, student_config.mesh)(state_shape)
+    params = sharding.to_global_array(params, state_shardings.params)
 
-    params = sharding.to_global_array(params, in_shardings)
     state = jax.jit(
         _jit_init_state,
-        in_shardings=(in_shardings,),
+        in_shardings=(state_shardings.params,),
         out_shardings=state_shardings,
         donate_argnums=(0,),
     )(params)
-
-    disable_jit = os.environ.get("JAX_DISABLE_JIT", "").lower()
-    if not (args.debug or disable_jit == "true" or disable_jit == "1"):
-        jax.tree.map(lambda x: x.delete(), params)  # make sure params are deleted
 
     return state, state_shardings
 
@@ -417,20 +408,20 @@ def main(args: CrossTokenizerDistillArgs):
     student_config = get_config(**asdict(args.student))
 
     teacher_config.max_length = args.max_teacher_length
-    if not args.debug and args.max_teacher_length % 128 == 0:
+    if not args.debug and args.max_teacher_length % 128 == 0 and jax.devices()[0].platform == "tpu":
         teacher_config._attn_implementation = "pallas_flash_attention"
     else:
         logger.warning(
-            "Using eager attention implementation for teacher (max length not divisible by 128 or debug)"
+            "Using eager attention implementation for teacher (max length not divisible by 128 or debug or not TPU)"
         )
         teacher_config._attn_implementation = "eager"
 
     student_config.max_length = args.max_student_length
-    if not args.debug and args.max_student_length % 128 == 0:
+    if not args.debug and args.max_student_length % 128 == 0 and jax.devices()[0].platform == "tpu":
         student_config._attn_implementation = "pallas_flash_attention"
     else:
         logger.warning(
-            "Using eager attention implementation for student (max length not divisible by 128 or debug)"
+            "Using eager attention implementation for student (max length not divisible by 128 or debug or not TPU)"
         )
         student_config._attn_implementation = "eager"
 
@@ -543,7 +534,7 @@ def main(args: CrossTokenizerDistillArgs):
             )
     else:
         teacher_embeddings = None
-        teacher_model_params = None    
+        teacher_model_params = None
 
     if target_tokenizer_name == original_student_tokenizer_name:
         new_embeddings = embeddings
@@ -766,10 +757,17 @@ def main(args: CrossTokenizerDistillArgs):
                 config=student_config,
             )
 
-            uses_dummy_teacher_params = isinstance(params["teacher_model"], jnp.ndarray) and params["teacher_model"].size == 0
+            uses_dummy_teacher_params = (
+                isinstance(params["teacher_model"], jnp.ndarray)
+                and params["teacher_model"].size == 0
+            )
 
             teacher_model_params = param.assign_embeddings(
-                params["model"] if uses_dummy_teacher_params else params["teacher_model"],
+                (
+                    params["model"]
+                    if uses_dummy_teacher_params
+                    else params["teacher_model"]
+                ),
                 params["teacher_embeddings"],
                 config=teacher_config,
             )
@@ -952,39 +950,50 @@ def main(args: CrossTokenizerDistillArgs):
                 return jnp.mean(loss_values), scalar_report
 
             grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=1)
-            (loss, scalar_report), grad = grad_fn(
-                state.params, trainable_params
-            )
-        elif args.multitask_aggregation_fn in {"approx_gradmag", "approx_gradmag_preserve_mag"}:
+            (loss, scalar_report), grad = grad_fn(state.params, trainable_params)
+        elif args.multitask_aggregation_fn in {
+            "approx_gradmag",
+            "approx_gradmag_preserve_mag",
+        }:
             jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=1)
             (last_layer_grads, _) = jac_fn(
                 state.params, last_layer_trainable_params, trainable_params
             )
             approx_grad_norm = multitask.compute_global_grad_norm(last_layer_grads)
             # stop grad is not necessary here since the var is defined outside compute_loss_weighted, but added for clarity
-            approx_loss_weights = jax.lax.stop_gradient(multitask.compute_inv_global_grad_norm(last_layer_grads))
+            approx_loss_weights = jax.lax.stop_gradient(
+                multitask.compute_inv_global_grad_norm(last_layer_grads)
+            )
 
             if args.multitask_aggregation_fn == "approx_gradmag_preserve_mag":
                 denominator = jnp.sum(approx_loss_weights)
             else:
                 denominator = 1.0
 
-            last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0) / denominator, multitask.gradmag(last_layer_grads))
+            last_layer_grad = jax.tree.map(
+                lambda x: jnp.sum(x, axis=0) / denominator,
+                multitask.gradmag(last_layer_grads),
+            )
 
             def compute_loss_weighted(*pargs):
                 loss_values, scalar_report = compute_loss(*pargs)
-                return jnp.sum(loss_values * approx_loss_weights) / denominator, scalar_report
+                return (
+                    jnp.sum(loss_values * approx_loss_weights) / denominator,
+                    scalar_report,
+                )
 
-            grad_fn = jax.value_and_grad(
-                compute_loss_weighted, has_aux=True, argnums=2
-            )
+            grad_fn = jax.value_and_grad(compute_loss_weighted, has_aux=True, argnums=2)
             (loss, scalar_report), non_last_layer_grad = grad_fn(
                 state.params, last_layer_trainable_params, trainable_params
             )
 
             for loss_idx, loss_name in enumerate(args.losses):
-                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[loss_idx]
-                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = approx_loss_weights[loss_idx]
+                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[
+                    loss_idx
+                ]
+                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = (
+                    approx_loss_weights[loss_idx]
+                )
 
             grad = jax.tree.map(
                 lambda x, y: x if x is not None else y,

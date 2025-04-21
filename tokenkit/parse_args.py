@@ -17,18 +17,6 @@ class HypernetArgs:
     multiply_hidden_dim_by_num_embeddings: bool = True
 
 @dataclass
-class OptimizerArgs:
-    type: str
-    weight_decay: float
-    b1: float
-    b2: float
-    eps: float
-    grad_acc_steps: int | None
-    learning_rate: float
-    max_grad_norm: float | None
-    param_groups: list[dict]
-
-@dataclass
 class EvalArgs:
     tasks: list[str]
     lengths: list[int]

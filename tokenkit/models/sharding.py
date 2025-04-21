@@ -116,6 +116,10 @@ def get_sharding_fn(shard_patterns, mesh):
     name_to_size = {name: size for name, size in mesh.shape_tuple}
 
     def get_pspec(path, v):
+        # this is a dummy parameter for e.g. PEFT, so no need to shard
+        if np.prod(v.shape) == 0:
+            return P()
+
         path_tuple = tuple(str(utils.keystr(x)) for x in path)
         path = ".".join(path_tuple)
 

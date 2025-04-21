@@ -85,7 +85,7 @@ class TrainZettHnArgs:
     collator: TokenizerSamplerCollatorArgs
     data: dict[str, Any]
     hypernet: parse_args.HypernetArgs
-    optimizer: parse_args.OptimizerArgs
+    optimizer: dict[str, Any]
     eval: HnEvalArgs
     model: parse_args.ModelArgs
     baseline: BaselineArgs = field(default_factory=BaselineArgs)
@@ -368,7 +368,7 @@ def main(args: TrainZettHnArgs):
 
         hypernet = tokenkit.compat.hypernet.Hypernet(hn_config, dtype=dtype)
 
-    optimizer_kwargs = asdict(args.optimizer)
+    optimizer_kwargs = args.optimizer
     learning_rate_fn = lr.linear_warmup_cosine_decay_with_linear_prefix(
         optimizer_kwargs.pop("learning_rate"),
         args.steps,

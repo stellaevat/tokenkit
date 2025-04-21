@@ -33,18 +33,19 @@ This library aims to let you accomplish all of this.
 
 `tokenkit` is primarily implemented in Jax, using PyTorch for data loading (so your PyTorch installation does not need to support an accelerator). Recommended installation:
 
+<details>
+<summary><strong>TPU</strong></summary>
+
 ```bash
 # Clone the repository & install the library
 git clone https://github.com/bminixhofer/tokenkit
 
 # Create a new virtual environment
+# Currently, requires Python <=3.10, but we are working on this: https://github.com/bminixhofer/tokenkit/issues/4
 python -m venv tokenkit_env
 . tokenkit_env/bin/activate
 
 # Install torch & jax 0.5.0
-# Jax installation instructions: https://docs.jax.dev/en/latest/installation.html#installation
-# PyTorch installation instructions: https://pytorch.org/get-started/locally/
-# For example:
 pip install torch jax[tpu]==0.5.0 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 # Currently, tokenkit relies on a fork of `lm_eval`
@@ -53,8 +54,37 @@ pip install git+https://github.com/bminixhofer/lm-evaluation-harness
 # Install the library and the remaining dependencies
 pip install -r requirements.txt
 pip install -e .
+# You can ignore warnings from the command below, see https://github.com/bminixhofer/tokenkit/issues/4
 pip install paxml==1.4.0 praxis==1.4.0 --no-deps
 ```
+</details>
+
+<details>
+<summary><strong>GPU</strong></summary>
+
+```bash
+# Clone the repository & install the library
+git clone https://github.com/bminixhofer/tokenkit
+
+# Create a new virtual environment
+# Currently, requires Python <=3.10, but we are working on this: https://github.com/bminixhofer/tokenkit/issues/4
+python -m venv tokenkit_env
+. tokenkit_env/bin/activate
+
+# Install torch & jax 0.5.0
+# you may need to substitute cuda12 with the version of CUDA you are using:
+pip install torch jax[cuda12]==0.5.0
+
+# Currently, tokenkit relies on a fork of `lm_eval`
+pip install git+https://github.com/bminixhofer/lm-evaluation-harness
+
+# Install the library and the remaining dependencies
+pip install -r requirements.txt
+pip install -e .
+# You can ignore warnings from the command below, see https://github.com/bminixhofer/tokenkit/issues/4
+pip install paxml==1.4.0 praxis==1.4.0 --no-deps
+```
+</details>
 
 ## Features
 

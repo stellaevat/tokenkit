@@ -6,6 +6,7 @@ import jax.experimental.mesh_utils
 import regex as re
 from jax.experimental.multihost_utils import process_allgather
 from jax.sharding import PartitionSpec as P
+import numpy as np
 
 from tokenkit import utils
 

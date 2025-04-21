@@ -131,7 +131,7 @@ def get_state(
     model_params,
     original_embeddings,
     new_embeddings,
-    teacher_model_params,  # TODO: possible to save memory by sharing student/teacher params if they are the same model and only training LoRA
+    teacher_model_params,
     teacher_embeddings,
     space_mask_teacher,
     space_mask_new,
@@ -144,6 +144,9 @@ def get_state(
     shard_patterns,
 ):
     dtype = getattr(jnp, args.dtype)
+
+    if teacher_embeddings is None:
+        teacher_embeddings = original_embeddings
 
     # pad to multiple
     n_pad_teacher = utils.get_n_pad(
@@ -184,9 +187,17 @@ def get_state(
         space_mask_new, ((0, n_pad_new),), mode="constant", constant_values=False
     )
 
+    if teacher_model_params is None and args.train_model_mode == "full":
+        # we need a separate copy of the teacher parameters
+        teacher_model_params = jax.tree.map(lambda x: x.astype(dtype), model_params)
+    else:
+        logger.info("Using a single copy of the model parameters for the teacher and the student.")
+        # we can share the student and teacher parameters, indicated via empty teacher_model_params
+        teacher_model_params = jnp.array([])
+
     params = {
         "model": model_params,
-        "teacher_model": jax.tree.map(lambda x: x.astype(dtype), teacher_model_params),
+        "teacher_model": teacher_model_params,
         "teacher_embeddings": teacher_embeddings,
         "new_embeddings": new_embeddings,
     }
@@ -483,12 +494,6 @@ def main(args: CrossTokenizerDistillArgs):
     else:
         student_mapping = teacher_mapping = None
 
-    model_params = param.load_params(**student_model_kwargs)
-    if hasattr(args, "teacher") is not None:
-        teacher_model_params = param.load_params(**teacher_model_kwargs)
-    else:
-        teacher_model_params = model_params
-
     teacher_model = FlaxAutoModelForCausalLM.from_config(
         teacher_config,
         dtype=dtype,
@@ -504,30 +509,13 @@ def main(args: CrossTokenizerDistillArgs):
     if args.gradient_checkpointing:
         new_model.enable_gradient_checkpointing()
 
-    n_embd = param.get(
-        model_params, param.get_input_embedding_path(student_config.model_type)
-    ).shape[-1]
-
+    model_params = param.load_params(**student_model_kwargs)
     embeddings, model_params = param.stack_embeddings(
         model_params,
         student_config,
         pop_embeddings=True,
     )
-    teacher_embeddings, teacher_model_params = param.stack_embeddings(
-        teacher_model_params,
-        teacher_config,
-        pop_embeddings=True,
-    )
     embeddings = embeddings[: len(tokenizer_student_original)]
-    teacher_embeddings = teacher_embeddings[: len(tokenizer_teacher)]
-
-    if len(teacher_embeddings) < len(tokenizer_teacher):
-        logger.warning(
-            "Teacher embeddings are smaller than teacher tokenizer, padding embeddings with random embeddings."
-        )
-        teacher_embeddings = pad_embeddings_with_random(
-            teacher_embeddings, tokenizer_teacher, seed=args.seed
-        )
 
     if len(embeddings) < len(tokenizer_student_original):
         logger.warning(
@@ -536,6 +524,26 @@ def main(args: CrossTokenizerDistillArgs):
         embeddings = pad_embeddings_with_random(
             embeddings, tokenizer_student_original, seed=args.seed
         )
+
+    if args.teacher is not None:
+        teacher_model_params = param.load_params(**teacher_model_kwargs)
+        teacher_embeddings, teacher_model_params = param.stack_embeddings(
+            teacher_model_params,
+            teacher_config,
+            pop_embeddings=True,
+        )
+        teacher_embeddings = teacher_embeddings[: len(tokenizer_teacher)]
+
+        if len(teacher_embeddings) < len(tokenizer_teacher):
+            logger.warning(
+                "Teacher embeddings are smaller than teacher tokenizer, padding embeddings with random embeddings."
+            )
+            teacher_embeddings = pad_embeddings_with_random(
+                teacher_embeddings, tokenizer_teacher, seed=args.seed
+            )
+    else:
+        teacher_embeddings = None
+        teacher_model_params = None    
 
     if target_tokenizer_name == original_student_tokenizer_name:
         new_embeddings = embeddings
@@ -575,7 +583,7 @@ def main(args: CrossTokenizerDistillArgs):
 
     hypernet = Hypernet(
         dtype=dtype,
-        hidden_size=n_embd,
+        hidden_size=embeddings.shape[-1],
         num_embeddings=1 if student_config.tie_word_embeddings else 2,
         max_seq_length=1,
         vocab_size=len(target_tokenizer),  # TODO: implement vocab padding
@@ -758,8 +766,10 @@ def main(args: CrossTokenizerDistillArgs):
                 config=student_config,
             )
 
+            uses_dummy_teacher_params = isinstance(params["teacher_model"], jnp.ndarray) and params["teacher_model"].size == 0
+
             teacher_model_params = param.assign_embeddings(
-                params["teacher_model"],
+                params["model"] if uses_dummy_teacher_params else params["teacher_model"],
                 params["teacher_embeddings"],
                 config=teacher_config,
             )

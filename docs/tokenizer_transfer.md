@@ -106,7 +106,9 @@ The (local or HF hub) paths to the model to transfer. If we do not specify a sep
 name=$NAME
 ```
 
-The name to track the experiment with. By default, `tokenkit` uses [Weights & Biases](https://www.wandb.ai/) to track experiments.
+The name to track the experiment with. By default, `tokenkit` uses [Weights & Biases](https://www.wandb.ai/) to track experiments. 
+
+This is all, you can now transfer your first model!
 
 ## Transfer to Bytes
 

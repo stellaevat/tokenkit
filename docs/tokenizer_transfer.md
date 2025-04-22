@@ -39,7 +39,9 @@ python3 scripts/cross_tokenizer_distill.py \
     name=$NAME
 ```
 
-Default arguments are taken from [`configs/cross_tokenizer_distill.yaml`](../configs/cross_tokenizer_distill.yaml). You can keep many of these as-is. Typically, overriding some arguments is enough. Let's go over the overriden arguments in more detail:
+Default arguments are taken from [`configs/cross_tokenizer_distill.yaml`](../configs/cross_tokenizer_distill.yaml). You can keep many of these as-is. A notably parameter which we don't override here is the dataset: we use the [Tulu3 instruction-tuning dataset](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture). This is a good choice for transfer of chat / instruction-following models, you can update this to fit your use case by modifying the `data` section in [`configs/cross_tokenizer_distill.yaml`](../configs/cross_tokenizer_distill.yaml).
+
+Let's go over the overriden arguments in more detail:
 
 ```
 losses=[sft,alm_unconstrained] \

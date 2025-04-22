@@ -1,7 +1,5 @@
 # Tokenizer Transfer via tokenkit
 
-## Overview
-
 This guide will walk you through the process of transferring a pretrained model to a new tokenizer using tokenkit.
 
 First, follow the installation instructions in the [README](../README.md).

@@ -56,7 +56,7 @@ def load_flax_checkpoint_in_pytorch_model(model, flax_checkpoint_path, flax_cls)
 class Args:
     checkpoint: str = "outputs/patch"
     output: str = "outputs/export"
-    use_cpu: bool = False
+    use_cpu: bool = True
     tmp_save_dir: str = "/tmp/tokenkit/"
     with_pt: bool = False
     expand_input_ids_model: str | None = None

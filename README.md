@@ -1,7 +1,9 @@
 <h1 align="center">tokenkit🔁</h1>
 <h3 align="center">Tokenization Transfer for LLMs</h3>
 
-![tokenkit](https://github.com/user-attachments/assets/976478c8-8994-4780-8d77-b429ec707932)
+<div align="center">
+<img src="https://github.com/user-attachments/assets/976478c8-8994-4780-8d77-b429ec707932" width="600">
+</div>
 
 `tokenkit` is a toolkit implementing advanced methods to transfer *models* and *model knowledge* across tokenizers.
 
@@ -86,6 +88,13 @@ pip install paxml==1.4.0 praxis==1.4.0 --no-deps
 ```
 </details>
 
+## Guides
+
+Start here!
+
+- [Tokenizer Transfer via tokenkit](./docs/tokenizer_transfer.md)
+- [Byteification: A Unified Interface to Tokenizers](./docs/byteification.md)
+
 ## Features
 
 ### Cross-Tokenizer Distillation
@@ -120,20 +129,19 @@ To evaluate pretrained byte-level models, you'll need to pass embeddings to expa
 
 ```bash
 python3 scripts/eval.py \
-  +main.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-Byte\' \
-  +main.tokenizer_name=\'benjamin/Gemma2-2B-IT-Byte:source=Gemma2:conversion=prebyteified\' \
-  expand_input_ids=true \
-  +expand.pretrained_model_name_or_path=\'benjamin/gemma-2-2b-it-flax\' \
-  +expand.tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2\' \
+  model.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-Byte\' \
+  model.tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2:conversion=byte\' \
+  expand_model.pretrained_model_name_or_path=\'benjamin/gemma-2-2b-it-flax\' \
+  expand_model.tokenizer_name=\'google/gemma-2-2b-it:source=Gemma2\' \
   eval.tasks=[mmlu]
 ```
 
-To evaluate any other model (e.g., subword-to-subword transferred models), use for example the following:
+To evaluate any other model (e.g., subword-to-subword transferred models), use something like the following:
 
 ```bash
 python3 scripts/eval.py \
-  +main.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer\' \
-  +main.tokenizer_name=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer:source=Gemma2:conversion=prebyteified\' \
+  model.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer\' \
+  model.tokenizer_name=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer:source=Gemma2:conversion=prebyteified\' \
   eval.tasks=[mmlu] \
 ```
 

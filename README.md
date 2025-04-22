@@ -9,6 +9,7 @@
 
 ## News
 
+- __2025-04-22__: New [Llama3-2-3B-IT-Byte](https://huggingface.co/benjamin/Llama3-2-3B-IT-Byte) and [Gemma2-2B-IT-Byte](https://huggingface.co/benjamin/Gemma2-2B-IT-Byte) checkpoints with native `transformers`s support (plus, documentation on how to train them). Also, new guides for [running tokenizer transfer](./docs/tokenizer_transfer.md) and [byteification](./docs/byteification.md)!
 - __2025-04-02__: The initial release of `tokenkit` with support for cross-tokenizer distillation via ALM and Zero-Shot Tokenizer Transfer via FVT!
 
 ## Contents

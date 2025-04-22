@@ -14,6 +14,7 @@
 ## Contents
 - [Why Transfer Across Tokenizers?](#why-transfer-across-tokenizers)
 - [Installation](#installation)
+- [Guides](#guides)
 - [Features](#features)
     - [Cross-Tokenizer Distillation](#cross-tokenizer-distillation)
     - [Zero-Shot Tokenizer Transfer](#zero-shot-tokenizer-transfer)

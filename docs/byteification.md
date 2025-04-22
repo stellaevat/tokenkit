@@ -34,7 +34,7 @@ tok1.tokenize(" Café") # ['ĠCafÃ©']
 tok2.tokenize(" Café") # ['ĠCafÃ©']
 ```
 
-The API is not 100% compatible with HuggingFace's tokenizers, but most functionality matches (e.g., `convert_ids_to_tokens`, `convert_tokens_to_ids`, `get_vocab`, `tokenize`, `add_tokens`).
+This always 100% preserves the tokenizer functionality (e.g., which tokens any text is encoded as). The API mostly matches the HuggingFace tokenizers API (e.g., `convert_ids_to_tokens`, `convert_tokens_to_ids`, `get_vocab`, `tokenize`, `add_tokens`) but is not exactly the same.
 
 This allows us to compute things like lexical overlap and token sequence alignments accurately. `tokenkit` also implements an exact alignment algorithm between tokenizers, including tokenizers with different special tokens (e.g., different chat templates).
 

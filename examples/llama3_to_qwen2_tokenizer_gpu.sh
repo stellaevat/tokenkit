@@ -5,6 +5,11 @@ python3 scripts/cross_tokenizer_distill.py \
     losses=[sft,alm_unconstrained] \
     alm_mode=merge_by_space_prob+append_space \
     tokenizer_pair_bias_threshold=0.1 \
+    hypernet.architecture=identity \
+    multitask_aggregation_fn=approx_gradmag_preserve_mag \
+    train_model_mode=lora \
+    model_lora_rank=64 \
+    model_lora_alpha=64 \
     n_data_parallel=1 \
     n_model_parallel=1 \
     steps=5000 \

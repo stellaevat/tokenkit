@@ -61,6 +61,7 @@ class State:
     params: flax.struct.PyTreeNode
     logits: jnp.ndarray | None = None
     hidden_states: jnp.ndarray | None = None
+    expand_input_ids_matrix: jnp.ndarray | None = None
 
 
 class Generator:
@@ -127,12 +128,21 @@ class Generator:
 
         self.expand_input_ids = expand_input_ids
         if expand_input_ids:
-            self.expand_input_ids_matrix = utils.get_expand_input_ids_matrix(
-                tokenizer, expand_input_ids_vocab, module=jnp
+            self.expand_input_ids_matrix = sharding.to_global_array(
+                utils.get_expand_input_ids_matrix(
+                    tokenizer, expand_input_ids_vocab, module=np
+                ),
+                (
+                    NamedSharding(mesh, P(None)),
+                    NamedSharding(mesh, P(None, None)),
+                )
             )
             self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
                 tokenizer, expand_input_ids_vocab
             )
+        else:
+            self.expand_input_ids_matrix = None
+            self.expand_input_ids_dict = None
 
         self.until_tokens = []
         if until is not None:
@@ -307,6 +317,10 @@ class Generator:
             params=self.param_shardings,
             logits=NamedSharding(mesh, P(None, None)),
             hidden_states=NamedSharding(mesh, P(None, None)),
+            expand_input_ids_matrix=(
+                NamedSharding(mesh, P(None)),
+                NamedSharding(mesh, P(None, None)),
+            ) if expand_input_ids else None,
         )
 
     def compute_inputs_embeds(
@@ -439,6 +453,7 @@ class Generator:
             params=state.params,
             logits=next_logits,
             hidden_states=next_hidden_states,
+            expand_input_ids_matrix=state.expand_input_ids_matrix,
         )
 
     def generate_condition(self, state: State):
@@ -483,6 +498,7 @@ class Generator:
                 "past_key_values": self.get_cache(length),
             },
             params=self.params,
+            expand_input_ids_matrix=self.expand_input_ids_matrix,
         )
 
     def _compile_fns(
@@ -682,6 +698,7 @@ class Generator:
                     "past_key_values": cache,
                 },
                 params=self.params,
+                expand_input_ids_matrix=self.expand_input_ids_matrix,
             )
 
             state = compiled_generate_fns[padded_prefill_length](state)
@@ -699,6 +716,7 @@ class Generator:
 
             # recycle out state buffers
             self.params = state.params
+            self.expand_input_ids_matrix = state.expand_input_ids_matrix
             init_cache = state.model_kwargs["past_key_values"]
 
         return generations

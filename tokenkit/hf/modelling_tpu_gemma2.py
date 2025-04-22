@@ -1141,6 +1141,7 @@ class TPUGemma2ForCausalLM(TPUGemma2PreTrainedModel, GenerationMixin):
     ):
         # Overwritten: has a special cache type, `HybridCache`
 
+        past_input_ids = input_ids
         # If we have cache: let's slice `input_ids` through `cache_position`, to keep only the unprocessed tokens
         # Exception 1: when passing input_embeds, input_ids may be missing entries
         # Exception 2: some generation methods do special slicing of input_ids, so we don't need to do it here
@@ -1205,7 +1206,7 @@ class TPUGemma2ForCausalLM(TPUGemma2PreTrainedModel, GenerationMixin):
         )
 
         if self.config.expand_input_ids:
-            model_inputs["past_input_ids"] = input_ids
+            model_inputs["past_input_ids"] = past_input_ids
 
         return model_inputs
 

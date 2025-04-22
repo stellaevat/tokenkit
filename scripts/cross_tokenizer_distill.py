@@ -1326,6 +1326,12 @@ def main(args: CrossTokenizerDistillArgs):
                         *pargs,
                     )
 
+                jaxlm_kwargs = {"score_fn": jaxlm_score_fn}
+
+                if args.expand_input_ids:
+                    jaxlm_kwargs["expand_input_ids"] = True
+                    jaxlm_kwargs["expand_input_ids_vocab"] = tokenizer_student_original.get_vocab()
+
                 lm_eval_metrics, post_eval_params_buffer = eval.evaluate(
                     model=new_model,
                     config=student_config,
@@ -1333,7 +1339,7 @@ def main(args: CrossTokenizerDistillArgs):
                     tokenizer=target_tokenizer,
                     logit_mask=state.logit_mask_new == 0,
                     output=output_dir / f"step_{step + 1}" / "lm_eval",
-                    jaxlm_kwargs={"score_fn": jaxlm_score_fn},
+                    jaxlm_kwargs=jaxlm_kwargs,
                     **asdict(args.eval),
                 )
                 state.params["model"] = jdematerialize_lora(

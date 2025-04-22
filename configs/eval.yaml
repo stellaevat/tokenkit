@@ -1,10 +1,19 @@
 use_cpu: false
-expand_input_ids: false
 pad_to_multiple_of: 128
+output: outputs/eval
+
+model:
+  pretrained_model_name_or_path: "benjamin/gemma-2-2b-it-flax"
+  tokenizer_name: "google/gemma-2-2b-it:source=Gemma2"
+
+expand_model:
+  pretrained_model_name_or_path: null
+  tokenizer_name: null
 
 eval:
-  output: outputs/eval
-
-defaults:
-  - _self_
-  - eval: default
+  tasks: ["piqa", "boolq", "arc_easy", "hellaswag"]
+  lengths: [128, 256, 512, 1024, 2048]
+  tokens_per_batch: 4096
+  add_bos: true
+  chat_template_mode: surround_instruct
+  confirm_run_unsafe_code: true

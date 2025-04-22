@@ -115,7 +115,6 @@ class Generator:
         pad_to_multiple_of=128,
         expand_input_ids=False,
         expand_input_ids_vocab=None,
-        expand_input_ids_embeddings=None,
     ):
         self.mesh = mesh
         self.tokenizer = tokenizer
@@ -134,7 +133,6 @@ class Generator:
             self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
                 tokenizer, expand_input_ids_vocab
             )
-            self.expand_input_ids_embeddings = expand_input_ids_embeddings
 
         self.until_tokens = []
         if until is not None:
@@ -333,7 +331,7 @@ class Generator:
                 )
 
             expanded_inputs_embeds = jnp.take(
-                self.expand_input_ids_embeddings, expanded_input_ids, axis=0
+                params["original_embeddings"][:, 0, :], expanded_input_ids, axis=0
             )
 
             inputs_embeds = inputs_embeds + expanded_inputs_embeds

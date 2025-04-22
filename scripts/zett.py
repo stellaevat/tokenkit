@@ -1,28 +1,33 @@
 import logging
 from pprint import pformat
 
-import hydra
 import jax
-from omegaconf import DictConfig, OmegaConf
-from transformers import AutoConfig, FlaxAutoModelForCausalLM
+from dataclasses import dataclass, asdict
+from transformers import FlaxAutoModelForCausalLM
 
+from tokenkit.hf import get_config
 from tokenkit import utils
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.models import param, sharding
+from tokenkit import parse_args
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class ZettArgs:
+    source_model: parse_args.ModelArgs
+    target_tokenizer_name: str
+    output: str
 
-@hydra.main(version_base=None, config_path="../configs", config_name="zett")
-def my_app(args: DictConfig) -> None:
-    logger.info(pformat(OmegaConf.to_object(args)))
+def main(args: ZettArgs) -> None:
+    logger.info(pformat(args))
 
     # Load the model & tokenizer
-    source_tokenizer = load_byteify_tokenizer(args.source_tokenizer_name)
+    source_tokenizer = load_byteify_tokenizer(args.source_model.tokenizer_name)
     target_tokenizer = load_byteify_tokenizer(args.target_tokenizer_name)
 
     mesh = sharding.get_mesh(devices=jax.devices("cpu"))
-    config = AutoConfig.from_pretrained(args.source_model_pretrained_name_or_path)
+    config = get_config(args.source_model.pretrained_model_name_or_path)
     config.mesh = mesh
 
     model = FlaxAutoModelForCausalLM.from_config(
@@ -32,10 +37,7 @@ def my_app(args: DictConfig) -> None:
     )
     del model.config.mesh
 
-    model_params = param.load_params(
-        pretrained_model_name_or_path=args.source_model_pretrained_name_or_path
-    )
-
+    model_params = param.load_params(**asdict(args.source_model))
     embeddings, model_params = param.stack_embeddings(
         model_params,
         config,
@@ -59,4 +61,4 @@ def my_app(args: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    my_app()
+    main(parse_args.parse_args(ZettArgs))

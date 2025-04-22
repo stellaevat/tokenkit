@@ -83,7 +83,6 @@ class JaxLM(lm_eval.api.model.LM):
         precompile=True,
         expand_input_ids=False,
         expand_input_ids_vocab=None,
-        expand_input_ids_embeddings=None,
     ):
         self.model = model
         self.model_fn = model.__call__
@@ -100,7 +99,6 @@ class JaxLM(lm_eval.api.model.LM):
 
         self.expand_input_ids = expand_input_ids
         self.expand_input_ids_vocab = expand_input_ids_vocab
-        self.expand_input_ids_embeddings = expand_input_ids_embeddings
 
         for length in list(lengths):
             if length > self.max_length:
@@ -291,7 +289,6 @@ class JaxLM(lm_eval.api.model.LM):
                 precompile=self.precompile,
                 expand_input_ids=self.expand_input_ids,
                 expand_input_ids_vocab=self.expand_input_ids_vocab,
-                expand_input_ids_embeddings=self.expand_input_ids_embeddings,
             )
             output_tokens = generator.generate(prompts)
             for request_index, example_output_tokens in zip(

@@ -918,9 +918,6 @@ def compute_baseline_uld_loss(args, loss_args):
 
 
 def compute_baseline_mined_loss(mined_mapping, args, loss_args):
-    # not a hard constraint but otherwise we would have to pad the shorter sequence
-    assert args.max_teacher_length == args.max_student_length
-
     alignment_matrix_a = (
         loss_args.batch["alignment_matrix_a_unconstrained"]
         .at[:, :-1]

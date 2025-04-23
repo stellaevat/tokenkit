@@ -84,3 +84,6 @@ tok = load_byteify_tokenizer("google/gemma-2-2b-it:source=Gemma2:conversion=byte
 tok.tokenize("<bos>Hello, world!") # ['<bos>', 'H', 'e', 'l', 'l', 'o', ',', 'Ġ', 'w', 'o', 'r', 'l', 'd', '!']
 print(len(tok)) # 256 + some special tokens
 ```
+
+---
+<h3 align="center">Next: <a href="./pytorch_alm_from_scratch.ipynb">Implementing ALM From Scratch in PyTorch</a></h3>

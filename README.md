@@ -9,13 +9,18 @@
 
 ## News
 
+- __2025-04-23__: A new guide on [implementing cross-tokenizer distillation via ALM from scratch in PyTorch](./docs/pytorch_alm_from_scratch.ipynb)! 🔥
 - __2025-04-22__: New [Llama3-2-3B-IT-Byte](https://huggingface.co/benjamin/Llama3-2-3B-IT-Byte) and [Gemma2-2B-IT-Byte](https://huggingface.co/benjamin/Gemma2-2B-IT-Byte) checkpoints with native `transformers` support (plus, documentation on how to train them). Also, new guides for [running tokenizer transfer](./docs/tokenizer_transfer.md) and [byteification](./docs/byteification.md)!
 - __2025-04-02__: The initial release of `tokenkit` with support for cross-tokenizer distillation via ALM and Zero-Shot Tokenizer Transfer via FVT!
 
 ## Contents
 - [Why Transfer Across Tokenizers?](#why-transfer-across-tokenizers)
 - [Installation](#installation)
+- [Quickstart](#quickstart)
 - [Guides](#guides)
+    - [Tokenizer Transfer via tokenkit](./docs/tokenizer_transfer.md)
+    - [Byteification: A Unified Interface to Tokenizers](./docs/byteification.md)
+    - [Implementing ALM From Scratch in PyTorch](./docs/pytorch_alm_from_scratch.ipynb) (new! 🔥)
 - [Features](#features)
     - [Cross-Tokenizer Distillation](#cross-tokenizer-distillation)
     - [Zero-Shot Tokenizer Transfer](#zero-shot-tokenizer-transfer)
@@ -90,12 +95,21 @@ pip install paxml==1.4.0 praxis==1.4.0 --no-deps
 ```
 </details>
 
+## Quickstart
+
+After installing the library, you can play around with the scripts in `examples/` to get started immediately. For example:
+
+```
+bash examples/llama3_to_byte_tokenizer_gpu.sh
+```
+
+If you're interested in reproducing or improving on a public model which has been trained via ALM, you can also take a look at the `tokenkit` command used to train that model, for example [in the Training section of the Llama3-2-3B-IT-Byte model card](https://huggingface.co/benjamin/Llama3-2-3B-IT-Byte#training).
+
 ## Guides
 
-Start here!
-
-- [Tokenizer Transfer via tokenkit](./docs/tokenizer_transfer.md)
+- [Tokenizer Transfer via tokenkit](./docs/tokenizer_transfer.md) (start here!)
 - [Byteification: A Unified Interface to Tokenizers](./docs/byteification.md)
+- [Implementing ALM From Scratch in PyTorch](./docs/pytorch_alm_from_scratch.ipynb) (interactive notebook)
 
 ## Features
 

@@ -73,10 +73,11 @@ class Generator:
         attention_mask,
         params,
         init_cache,
+        expand_input_ids_matrix=None,
     ):
         position_ids = (jnp.cumsum(attention_mask, axis=1) - 1) * attention_mask
 
-        inputs_embeds = self.compute_inputs_embeds(params, input_ids, expanded_input_ids)
+        inputs_embeds = self.compute_inputs_embeds(params, input_ids, expanded_input_ids, expand_input_ids_matrix)
 
         out = model_fn(
             input_ids=None,
@@ -128,19 +129,21 @@ class Generator:
 
         self.expand_input_ids = expand_input_ids
         if expand_input_ids:
+            self.expand_input_ids_matrix_shardings = (
+                NamedSharding(mesh, P(None)),
+                NamedSharding(mesh, P(None, None)),
+            )
             self.expand_input_ids_matrix = sharding.to_global_array(
                 utils.get_expand_input_ids_matrix(
                     tokenizer, expand_input_ids_vocab, module=np
                 ),
-                (
-                    NamedSharding(mesh, P(None)),
-                    NamedSharding(mesh, P(None, None)),
-                )
+                self.expand_input_ids_matrix_shardings
             )
             self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
                 tokenizer, expand_input_ids_vocab
             )
         else:
+            self.expand_input_ids_matrix_shardings = None
             self.expand_input_ids_matrix = None
             self.expand_input_ids_dict = None
 
@@ -317,14 +320,11 @@ class Generator:
             params=self.param_shardings,
             logits=NamedSharding(mesh, P(None, None)),
             hidden_states=NamedSharding(mesh, P(None, None)),
-            expand_input_ids_matrix=(
-                NamedSharding(mesh, P(None)),
-                NamedSharding(mesh, P(None, None)),
-            ) if expand_input_ids else None,
+            expand_input_ids_matrix=self.expand_input_ids_matrix_shardings,
         )
 
     def compute_inputs_embeds(
-        self, params, input_ids, expanded_input_ids=None, last_only=False
+        self, params, input_ids, expanded_input_ids=None, expand_input_ids_matrix=None, last_only=False
     ):
         embedding_matrix = param.get(
             params,
@@ -340,7 +340,7 @@ class Generator:
             if expanded_input_ids is None:
                 expanded_input_ids = utils.jax_expand_input_ids(
                     input_ids,
-                    self.expand_input_ids_matrix,
+                    expand_input_ids_matrix,
                     last_only=last_only,
                 )
 
@@ -356,7 +356,7 @@ class Generator:
         self,
         state: State,
     ):
-        inputs_embeds = self.compute_inputs_embeds(state.params, state.running_token, last_only=True)
+        inputs_embeds = self.compute_inputs_embeds(state.params, state.running_token, expand_input_ids_matrix=state.expand_input_ids_matrix, last_only=True)
 
         out = self.generate_fn(
             input_ids=None,
@@ -516,16 +516,18 @@ class Generator:
                     jnp.zeros((self.batch_size, length), dtype=jnp.int32),
                     self.params,
                     self.get_cache(length),
+                    self.expand_input_ids_matrix,
                 )
                 compiled_prefill_fns[length] = (
                     jax.jit(
-                        lambda input_ids, expanded_input_ids, attention_mask, params, init_cache: self.prefill(
+                        lambda input_ids, expanded_input_ids, attention_mask, params, init_cache, expand_input_ids_matrix: self.prefill(
                             self.prefill_fn,
                             input_ids,
                             expanded_input_ids,
                             attention_mask,
                             params,
                             init_cache,
+                            expand_input_ids_matrix,
                         ),
                         donate_argnums=(3,),
                         in_shardings=(
@@ -534,6 +536,7 @@ class Generator:
                             NamedSharding(self.mesh, P()),
                             self.param_shardings,
                             self.cache_shardings,
+                            self.expand_input_ids_matrix_shardings,
                         ),
                         out_shardings=(self.cache_shardings, None),
                     )
@@ -542,13 +545,14 @@ class Generator:
                 )
         else:
             compiled_prefill_fns = {
-                length: lambda input_ids, expanded_input_ids, attention_mask, params, init_cache: self.prefill(
+                length: lambda input_ids, expanded_input_ids, attention_mask, params, init_cache, expand_input_ids_matrix: self.prefill(
                     self.prefill_fn,
                     input_ids,
                     expanded_input_ids,
                     attention_mask,
                     params,
                     init_cache,
+                    expand_input_ids_matrix,
                 )
                 for length in self.lengths
             }
@@ -672,6 +676,7 @@ class Generator:
                     attention_mask,
                     self.params,
                     init_cache,
+                    self.expand_input_ids_matrix,
                 )[0]
 
                 cache = self.set_cache_length(
@@ -1095,6 +1100,7 @@ class LockstepGenerator:
                     attention_mask[model_idx],
                     self.generators[model_idx].params,
                     init_caches[model_idx],
+                    None, # expand input ids matrix not supported here
                 )[0]
                 for model_idx in range(len(self.generators))
             ]

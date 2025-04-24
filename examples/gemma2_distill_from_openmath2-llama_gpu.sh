@@ -8,7 +8,7 @@ python3 scripts/cross_tokenizer_distill.py \
     max_teacher_length=1024 \
     max_student_length=1024 \
     n_data_parallel=1 \
-    n_model_parallel=8 \
+    n_model_parallel=1 \
     steps=5000 \
     eval_interval=5000 \
     save_interval=5000 \

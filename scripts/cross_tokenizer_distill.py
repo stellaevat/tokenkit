@@ -187,15 +187,18 @@ def get_state(
         space_mask_new, ((0, n_pad_new),), mode="constant", constant_values=False
     )
 
-    if teacher_model_params is None and args.train_model_mode == "full":
-        # we need a separate copy of the teacher parameters
-        teacher_model_params = jax.tree.map(lambda x: x.astype(dtype), model_params)
+    if teacher_model_params is None:
+        if args.train_model_mode == "full":
+            # we need a separate copy of the teacher parameters
+            teacher_model_params = jax.tree.map(lambda x: x.astype(dtype), model_params)
+        else:
+            logger.info(
+                "Using a single copy of the model parameters for the teacher and the student."
+            )
+            # we can share the student and teacher parameters, indicated via empty teacher_model_params
+            teacher_model_params = jnp.array([])
     else:
-        logger.info(
-            "Using a single copy of the model parameters for the teacher and the student."
-        )
-        # we can share the student and teacher parameters, indicated via empty teacher_model_params
-        teacher_model_params = jnp.array([])
+        teacher_model_params = jax.tree.map(lambda x: x.astype(dtype), teacher_model_params)
 
     params = {
         "model": model_params,
@@ -1156,9 +1159,9 @@ def main(args: CrossTokenizerDistillArgs):
         return eval_metrics
 
     diter = iter(train_dataloader)
+    first_batch = next(iter(train_dataloader))
 
     if args.do_cost_analysis:
-        first_batch = next(iter(train_dataloader))
         compiled_train_step_fn = jtrain_step.lower(
             state, first_batch, first_batch
         ).compile()
@@ -1170,6 +1173,13 @@ def main(args: CrossTokenizerDistillArgs):
         logger.info("TFLOPs per step:", flops_per_step / (10**12))
         logger.info("Memory (MB) per step:", memory_per_step / (1024**2))
         sys.exit()
+
+    utils.print_example_alignments(
+        first_batch["alignment_matrix_b_unconstrained"][0],
+        first_batch["alignment_matrix_a_unconstrained"][0],
+        tokenizer_teacher.convert_ids_to_tokens(first_batch["input_ids_original"][0]),
+        target_tokenizer.convert_ids_to_tokens(first_batch["input_ids_new"][0]),
+    )
 
     train_metrics = []
     start_time = time.time()

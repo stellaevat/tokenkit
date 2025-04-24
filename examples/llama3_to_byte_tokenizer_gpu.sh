@@ -1,4 +1,4 @@
-NAME=llama3_to_qwen2_tokenizer
+NAME=llama3_to_byte
 python3 scripts/cross_tokenizer_distill.py \
     --config=configs/cross_tokenizer_distill.yaml \
     --overrides \

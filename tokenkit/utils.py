@@ -382,6 +382,23 @@ def get_n_pad(n, pad_to_multiple_of):
     return n_pad
 
 
+def print_example_alignments(teacher_tokens_to_chunks, student_tokens_to_chunks, teacher_tokens, student_tokens):
+    n_chunks = teacher_tokens_to_chunks.shape[1]
+    print(f"Example teacher tokens (n={teacher_tokens_to_chunks.sum()}):")
+    for chunk_idx in range(n_chunks):
+        chunk_tokens = [teacher_tokens[i] for i in np.where(teacher_tokens_to_chunks[:, chunk_idx])[0]]
+
+        bg_color = (40 + chunk_idx % 8) # cycle through colors black (40) to white (47)
+        print(f"\033[{bg_color}m" + " ".join(chunk_tokens) + "\033[0m", end=" ")
+
+    print(f"\nExample student tokens (n={student_tokens_to_chunks.sum()}):")
+    for chunk_idx in range(n_chunks):
+        chunk_tokens = [student_tokens[i] for i in np.where(student_tokens_to_chunks[:, chunk_idx])[0]]
+        
+        bg_color = (40 + chunk_idx % 8) # cycle through colors black (40) to white (47)
+        print(f"\033[{bg_color}m" + " ".join(chunk_tokens) + "\033[0m", end=" ")
+
+
 def param_report(params, train_mask):
     # TODO: update with LoRA support
     return

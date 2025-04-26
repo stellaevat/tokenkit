@@ -25,7 +25,7 @@ import yaml
 from datetime import datetime
 import shutil
 
-from tokenkit import utils, data, eval, parse_args, gcs_utils
+from tokenkit import utils, data, eval, parse_args, gcs_utils, lora
 from tokenkit.hf import get_config
 from tokenkit.training import losses, opt, lr, collators, checkpoint, multitask
 from tokenkit.utils import tqdm
@@ -115,7 +115,7 @@ class TrainZettHnArgs:
     alm_diff_fn: str = "binary_ce"
     distill_main_path_numerator: str = "chunk_count"
     distill_main_path_denominator: str = "chunk_count"
-    train_model: bool = False
+    train_model_mode: str = "no"
     train_embeddings: bool = True
     tokens_to_add: list[str] | None = None
     latents_to_align: str = "last_hidden_state"
@@ -209,6 +209,7 @@ def assign_embeddings(model_params, embeddings, config):
 
 
 def compute_embeddings_and_out(
+    args,
     params,
     input_ids,
     surface_forms,
@@ -236,8 +237,17 @@ def compute_embeddings_and_out(
         special_indices_in_reference,
     )
 
+    if args.train_model_mode == "lora":
+        model_params_with_lora = lora.materialize_lora(
+            params["model"],
+            params["model_lora"],
+            alpha=args.model_lora_alpha,
+        )
+    else:
+        model_params_with_lora = params["model"]
+
     params_with_updated_embeddings = assign_embeddings(
-        params["model"], predicted_embeddings, model.config
+        model_params_with_lora, predicted_embeddings, model.config
     )
 
     model.config.vocab_size = len(predicted_embeddings)
@@ -425,6 +435,14 @@ def main(args: TrainZettHnArgs):
             # keep around a copy of the original embeddings for the teacher (condition could be tightened)
             params["original_embeddings"] = jnp.copy(params["embeddings"])
 
+        if args.train_model_mode == "lora":
+            params["model_lora"] = lora.init_lora_params(
+                args,
+                params["model"],
+                model_type=student_config.model_type,
+                seed=args.seed,
+            )
+
         n_extra_embeddings = 256 # allocate space for 256 byte fallback embeddings 
         params["extra_embeddings"] = jax.random.normal(
             jax.random.PRNGKey(args.seed),
@@ -442,7 +460,8 @@ def main(args: TrainZettHnArgs):
                 [("hypernet", "in_scaler"), False],  # compat,
                 [("hypernet", "out_scaler"), False],  # compat,
                 [("hypernet", "scaler"), False],  # compat,
-                [("model",), args.train_model],
+                [("model",), True if args.train_model_mode == "full" else False],
+                [("model_lora",), True],
                 [("embeddings",), args.train_embeddings],
                 [("original_embeddings",), False],
                 [("extra_embeddings",), True],
@@ -580,6 +599,7 @@ def main(args: TrainZettHnArgs):
                 predicted_embeddings,
                 student_out,
             ) = compute_embeddings_and_out(
+                args,
                 params,
                 batch["input_ids_new"],
                 target_surface_forms,
@@ -808,6 +828,7 @@ def main(args: TrainZettHnArgs):
                 _,
                 student_out,
             ) = compute_embeddings_and_out(
+                args,
                 params,
                 batch["input_ids_new"],
                 target_surface_forms,
@@ -1016,8 +1037,8 @@ def main(args: TrainZettHnArgs):
             compiled_train_step_fn.memory_analysis().output_size_in_bytes
             + compiled_train_step_fn.memory_analysis().temp_size_in_bytes
         )
-        logger.info("TFLOPs per step:", flops_per_step / (10**12))
-        logger.info("Memory (MB) per step:", memory_per_step / (1024**2))
+        logger.info("TFLOPs per step: %.2f", flops_per_step / (10**12))
+        logger.info("Memory (MB) per step: %.2f", memory_per_step / (1024**2))
         sys.exit()
 
     train_metrics = []

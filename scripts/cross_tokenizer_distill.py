@@ -1170,8 +1170,8 @@ def main(args: CrossTokenizerDistillArgs):
             compiled_train_step_fn.memory_analysis().output_size_in_bytes
             + compiled_train_step_fn.memory_analysis().temp_size_in_bytes
         )
-        logger.info("TFLOPs per step:", flops_per_step / (10**12))
-        logger.info("Memory (MB) per step:", memory_per_step / (1024**2))
+        logger.info("TFLOPs per step: %.2f", flops_per_step / (10**12))
+        logger.info("Memory (MB) per step: %.2f", memory_per_step / (1024**2))
         sys.exit()
 
     utils.print_example_alignments(

@@ -25,11 +25,11 @@ import yaml
 from datetime import datetime
 import shutil
 
-from tokenkit import utils, data, eval, parse_args, gcs_utils, lora
+from tokenkit import utils, data, eval, parse_args, gcs_utils
 from tokenkit.hf import get_config
 from tokenkit.training import losses, opt, lr, collators, checkpoint, multitask
 from tokenkit.utils import tqdm
-from tokenkit.models import param, sharding
+from tokenkit.models import param, sharding, lora
 from tokenkit.models.hypernet import Hypernet
 from tokenkit.byteify import load_byteify_tokenizer
 

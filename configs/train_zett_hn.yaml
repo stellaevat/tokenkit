@@ -8,7 +8,7 @@ identity_lr: 3.e-4
 warmup_steps: 10_000
 steps: 200_000
 train_embeddings: false
-train_model: false
+train_model_mode: "no"
 num_workers: 64
 name: "unnamed"
 compat: false

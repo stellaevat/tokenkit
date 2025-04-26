@@ -117,6 +117,8 @@ class TrainZettHnArgs:
     distill_main_path_denominator: str = "chunk_count"
     train_model_mode: str = "no"
     train_embeddings: bool = True
+    model_lora_rank: int = 64
+    model_lora_alpha: int = 64
     tokens_to_add: list[str] | None = None
     latents_to_align: str = "last_hidden_state"
     latents_normalization: str = "l2_channelwise"

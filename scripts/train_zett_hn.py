@@ -35,6 +35,7 @@ from tokenkit.byteify import load_byteify_tokenizer
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class TokenizerSamplerCollatorArgs:
     do_tokenizer_sampling: bool = True
@@ -265,7 +266,9 @@ def compute_embeddings_and_out(
 
     out = FlaxCausalLMOutput(
         logits=jnp.where(
-            mask[None, None, :], out.logits, utils.get_large_negative_number(out.logits.dtype)
+            mask[None, None, :],
+            out.logits,
+            utils.get_large_negative_number(out.logits.dtype),
         ),
         hidden_states=out.hidden_states,
         attentions=out.attentions,
@@ -358,9 +361,7 @@ def main(args: TrainZettHnArgs):
 
         hn_config = copy.deepcopy(teacher_config)
         # write defaults
-        for key, value in asdict(
-            tokenkit.compat.hypernet.HypernetArgs()
-        ).items():
+        for key, value in asdict(tokenkit.compat.hypernet.HypernetArgs()).items():
             setattr(hn_config, key, value)
 
         hn_config.n_embd = n_embd
@@ -445,7 +446,7 @@ def main(args: TrainZettHnArgs):
                 seed=args.seed,
             )
 
-        n_extra_embeddings = 256 # allocate space for 256 byte fallback embeddings 
+        n_extra_embeddings = 256  # allocate space for 256 byte fallback embeddings
         params["extra_embeddings"] = jax.random.normal(
             jax.random.PRNGKey(args.seed),
             (n_extra_embeddings, *embeddings.shape[1:]),
@@ -496,7 +497,9 @@ def main(args: TrainZettHnArgs):
     state = jax.jit(init_state, out_shardings=state_shardings)(model_params)
 
     space_mask_original = np.zeros(state.params["embeddings"].shape[0], dtype=bool)
-    space_mask_original_unpadded = utils.get_space_mask(hn_tokenizer, args.space_mask_mode)
+    space_mask_original_unpadded = utils.get_space_mask(
+        hn_tokenizer, args.space_mask_mode
+    )
     space_mask_original[: len(space_mask_original_unpadded)] = (
         space_mask_original_unpadded
     )
@@ -556,7 +559,9 @@ def main(args: TrainZettHnArgs):
         }
         return new_state, metrics
 
-    def compute_lexical_loss(predicted_embeddings, target_surface_forms, source_embeddings, epsilon=1e-8):
+    def compute_lexical_loss(
+        predicted_embeddings, target_surface_forms, source_embeddings, epsilon=1e-8
+    ):
         lexical_overlap_mask = (
             target_surface_forms[:, 1:] == hn_tokenizer.pad_token_id
         ).all(axis=1)
@@ -633,7 +638,9 @@ def main(args: TrainZettHnArgs):
                 )
 
                 teacher_logits = teacher_out.logits.astype(jnp.float32)
-                teacher_mask = (jnp.arange(teacher_logits.shape[-1]) < state.original_n_vocab)
+                teacher_mask = (
+                    jnp.arange(teacher_logits.shape[-1]) < state.original_n_vocab
+                )
                 teacher_logits = jnp.where(
                     teacher_mask[None, None, :],
                     teacher_logits,
@@ -644,7 +651,9 @@ def main(args: TrainZettHnArgs):
                 )
                 teacher_probs = jnp.exp(teacher_logprobs)
             else:
-                teacher_out = teacher_logits = teacher_logprobs = teacher_probs = teacher_mask =None
+                teacher_out = teacher_logits = teacher_logprobs = teacher_probs = (
+                    teacher_mask
+                ) = None
 
             student_logits = student_out.logits.astype(jnp.float32)
             student_logprobs = jnp.clip(
@@ -655,13 +664,13 @@ def main(args: TrainZettHnArgs):
             loss_args = losses.LossArgs(
                 params=params,
                 batch=batch,
-                global_batch=batch, # TODO: impl
+                global_batch=batch,  # TODO: impl
                 teacher_config=teacher_config,
                 new_config=student_config,
                 teacher_out=teacher_out,
                 student_out=student_out,
                 tokenizer_teacher=original_tokenizer,
-                tokenizer_new=original_tokenizer, # TODO: impl pass eos_token and pad_token ids
+                tokenizer_new=original_tokenizer,  # TODO: impl pass eos_token and pad_token ids
                 teacher_probs=teacher_probs,
                 teacher_logprobs=teacher_logprobs,
                 teacher_logits=teacher_logits,
@@ -672,8 +681,20 @@ def main(args: TrainZettHnArgs):
                 scalar_report=scalar_report,
                 space_mask_teacher=space_mask_original,
                 space_mask_new=batch["space_mask"],
-                logit_mask_teacher=jnp.where(teacher_mask, 0.0, utils.get_large_negative_number(teacher_logits.dtype)) if teacher_mask is not None else None,
-                logit_mask_new=jnp.where(batch["mask"], 0.0, utils.get_large_negative_number(student_logits.dtype)),
+                logit_mask_teacher=(
+                    jnp.where(
+                        teacher_mask,
+                        0.0,
+                        utils.get_large_negative_number(teacher_logits.dtype),
+                    )
+                    if teacher_mask is not None
+                    else None
+                ),
+                logit_mask_new=jnp.where(
+                    batch["mask"],
+                    0.0,
+                    utils.get_large_negative_number(student_logits.dtype),
+                ),
             )
 
             loss_values = jnp.zeros(len(args.losses), dtype=jnp.float32)
@@ -697,7 +718,9 @@ def main(args: TrainZettHnArgs):
                 elif loss == "baseline_uld":
                     current_loss = losses.compute_baseline_uld_loss(args, loss_args)
                 elif loss == "lexical":
-                    current_loss, _ = compute_lexical_loss(predicted_embeddings, target_surface_forms, source_embeddings)
+                    current_loss, _ = compute_lexical_loss(
+                        predicted_embeddings, target_surface_forms, source_embeddings
+                    )
                 else:
                     raise ValueError(f"Invalid loss: {loss}")
 
@@ -725,14 +748,16 @@ def main(args: TrainZettHnArgs):
                                 args.loss_schedules[loss_idx]
                             )
                         )
-                    
+
                 loss_values = loss_values.at[loss_idx].set(weight * current_loss)
 
                 scalar_report[f"loss/{loss}"] = current_loss
                 scalar_report[f"loss/{loss}_weight"] = weight
 
             # report lexical loss & overlap (regardless of whether it's minimized or not)
-            lexical_loss, lexical_overlap = compute_lexical_loss(predicted_embeddings, target_surface_forms, source_embeddings)
+            lexical_loss, lexical_overlap = compute_lexical_loss(
+                predicted_embeddings, target_surface_forms, source_embeddings
+            )
             scalar_report["loss/lexical"] = lexical_loss
             scalar_report["loss/lexical_overlap"] = lexical_overlap
 
@@ -758,39 +783,50 @@ def main(args: TrainZettHnArgs):
                 return jnp.mean(loss_values), scalar_report
 
             grad_fn = jax.value_and_grad(compute_loss_avg, has_aux=True, argnums=1)
-            (loss, scalar_report), grad = grad_fn(
-                state.params, trainable_params
-            )
-        elif args.multitask_aggregation_fn in {"approx_gradmag", "approx_gradmag_preserve_mag"}:
+            (loss, scalar_report), grad = grad_fn(state.params, trainable_params)
+        elif args.multitask_aggregation_fn in {
+            "approx_gradmag",
+            "approx_gradmag_preserve_mag",
+        }:
             jac_fn = jax.jacrev(compute_loss, has_aux=True, argnums=1)
             (last_layer_grads, _) = jac_fn(
                 state.params, last_layer_params, trainable_params
             )
             approx_grad_norm = multitask.compute_global_grad_norm(last_layer_grads)
             # stop grad is not necessary here since the var is defined outside compute_loss_weighted, but added for clarity
-            approx_loss_weights = jax.lax.stop_gradient(multitask.compute_inv_global_grad_norm(last_layer_grads))
+            approx_loss_weights = jax.lax.stop_gradient(
+                multitask.compute_inv_global_grad_norm(last_layer_grads)
+            )
 
             if args.multitask_aggregation_fn == "approx_gradmag_preserve_mag":
                 denominator = jnp.sum(approx_loss_weights)
             else:
                 denominator = 1.0
 
-            last_layer_grad = jax.tree.map(lambda x: jnp.sum(x, axis=0) / denominator, multitask.gradmag(last_layer_grads))
+            last_layer_grad = jax.tree.map(
+                lambda x: jnp.sum(x, axis=0) / denominator,
+                multitask.gradmag(last_layer_grads),
+            )
 
             def compute_loss_weighted(*pargs):
                 loss_values, scalar_report = compute_loss(*pargs)
-                return jnp.sum(loss_values * approx_loss_weights) / denominator, scalar_report
+                return (
+                    jnp.sum(loss_values * approx_loss_weights) / denominator,
+                    scalar_report,
+                )
 
-            grad_fn = jax.value_and_grad(
-                compute_loss_weighted, has_aux=True, argnums=2
-            )
+            grad_fn = jax.value_and_grad(compute_loss_weighted, has_aux=True, argnums=2)
             (loss, scalar_report), non_last_layer_grad = grad_fn(
                 state.params, last_layer_params, trainable_params
             )
 
             for loss_idx, loss_name in enumerate(args.losses):
-                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[loss_idx]
-                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = approx_loss_weights[loss_idx] / denominator
+                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[
+                    loss_idx
+                ]
+                scalar_report[f"loss/{loss_name}_approx_loss_weight"] = (
+                    approx_loss_weights[loss_idx] / denominator
+                )
 
             grad = jax.tree.map(
                 lambda x, y: x if x is not None else y,
@@ -1015,6 +1051,18 @@ def main(args: TrainZettHnArgs):
         static_argnums=(0, 1),
         out_shardings=state_shardings.params["embeddings"],  # predicted_embeddings
     )
+    if args.train_model_mode == "lora":
+        jmaterialize_lora = jax.jit(
+            lora.materialize_lora,
+            in_shardings=(
+                state_shardings.params["model"],
+                state_shardings.params["model_lora"],
+            ),
+            out_shardings=state_shardings.params["model"],
+            static_argnums=(2,),
+        )
+    else:
+        jmaterialize_lora = lambda x, y, z: x
 
     def eval_loop(dataloader):
         eval_metrics = []
@@ -1031,9 +1079,7 @@ def main(args: TrainZettHnArgs):
         return eval_metrics
 
     if args.do_cost_analysis:
-        compiled_train_step_fn = jtrain_step.lower(
-            state, first_batch
-        ).compile()
+        compiled_train_step_fn = jtrain_step.lower(state, first_batch).compile()
         flops_per_step = compiled_train_step_fn.cost_analysis()["flops"]
         memory_per_step = (
             compiled_train_step_fn.memory_analysis().output_size_in_bytes
@@ -1095,7 +1141,9 @@ def main(args: TrainZettHnArgs):
 
             train_metrics = []
 
-        if (step + 1) % args.eval_interval == 0 or (step == 0 and args.eval_at_step_zero):
+        if (step + 1) % args.eval_interval == 0 or (
+            step == 0 and args.eval_at_step_zero
+        ):
             # TODO: probably extract into eval function doing everything here
             if ppl_eval_dataloader is not None:
                 ppl_metrics = eval_loop(ppl_eval_dataloader)
@@ -1131,10 +1179,18 @@ def main(args: TrainZettHnArgs):
                     ),
                     state.params["extra_embeddings"],
                     sharding.to_global_array(eval_tokenizer["special_indices"]),
-                    sharding.to_global_array(eval_tokenizer["special_indices_in_reference"]),
+                    sharding.to_global_array(
+                        eval_tokenizer["special_indices_in_reference"]
+                    ),
                 )
                 model_params_with_embeddings = assign_embeddings(
-                    state.params["model"], predicted_embeddings, student_config
+                    jmaterialize_lora(
+                        state.params["model"],
+                        state.params.get("model_lora"),
+                        args.model_lora_alpha,
+                    ),
+                    predicted_embeddings,
+                    student_config,
                 )
 
                 student_config.vocab_size = len(predicted_embeddings)
@@ -1162,7 +1218,9 @@ def main(args: TrainZettHnArgs):
             if jax.process_index() == 0:
                 utils.log(lm_eval_metrics, step=step + 1)
 
-        if (step + 1) % args.save_interval == 0 or (step == 0 and args.save_at_step_zero):
+        if (step + 1) % args.save_interval == 0 or (
+            step == 0 and args.save_at_step_zero
+        ):
             if upload_executor is not None:
                 upload_executor.shutdown(wait=True)
             multihost_utils.sync_global_devices("uploaded previous checkpoint")
@@ -1193,6 +1251,7 @@ def main(args: TrainZettHnArgs):
     if upload_executor is not None:
         upload_executor.shutdown(wait=True)
     multihost_utils.sync_global_devices("uploaded final checkpoint")
+
 
 if __name__ == "__main__":
     os.environ["HYDRA_FULL_ERROR"] = "1"

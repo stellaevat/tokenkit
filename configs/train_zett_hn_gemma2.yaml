@@ -41,16 +41,10 @@ eval:
 
 data:
   batch_size: 128
-  num_workers: 16
-  kind: hf
-  mix_languages: false
-  streaming: true
+  kind: "hf_saved"
+  lang_code: en
   dataset_configs:
-  - lang_code: en
-    kwargs:
-      path: "allenai/madlad-400"
-      name: "en"
-      split: "clean"
+    - path: "/lfs/dolmino_50B_medium"
 
 # TODO: disentangle data/collator args
 collator:

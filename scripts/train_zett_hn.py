@@ -1061,8 +1061,19 @@ def main(args: TrainZettHnArgs):
             out_shardings=state_shardings.params["model"],
             static_argnums=(2,),
         )
+        jdematerialize_lora = jax.jit(
+            lora.dematerialize_lora,
+            in_shardings=(
+                state_shardings.params["model"],
+                state_shardings.params["model_lora"],
+            ),
+            out_shardings=state_shardings.params["model"],
+            donate_argnums=(0,),
+            static_argnums=(2,),
+        )
     else:
         jmaterialize_lora = lambda x, y, z: x
+        jdematerialize_lora = lambda x, y, z: x
 
     def eval_loop(dataloader):
         eval_metrics = []
@@ -1194,7 +1205,7 @@ def main(args: TrainZettHnArgs):
                 )
 
                 student_config.vocab_size = len(predicted_embeddings)
-                current_lm_eval_metrics, _ = eval.evaluate(
+                current_lm_eval_metrics, post_eval_params_buffer = eval.evaluate(
                     model=student_model,
                     config=student_config,
                     params=model_params_with_embeddings,
@@ -1202,6 +1213,12 @@ def main(args: TrainZettHnArgs):
                     logit_mask=eval_tokenizer["logit_mask"],
                     **eval_kwargs,
                 )
+                state.params["model"] = jdematerialize_lora(
+                    param.unassign_embeddings(post_eval_params_buffer, student_config),
+                    state.params.get("model_lora"),
+                    args.model_lora_alpha,
+                )
+
                 lm_eval_metrics.update(
                     {
                         f"lm_eval/{eval_tokenizer['name']}/" + "_".join(k): v

@@ -38,6 +38,10 @@ eval:
   tokenizers:
     - tokenizer: openai-community/gpt2:source=GPT2:target=Gemma2
       name: gpt2
+    - tokenizer: mistralai/Mistral-Small-3.1-24B-Base-2503:source=Mistral:target=Gemma2
+      name: mistral
+    - tokenizer: meta-llama/Llama-3.2-3B:source=Llama3:target=Gemma2
+      name: llama3
 
 data:
   batch_size: 128

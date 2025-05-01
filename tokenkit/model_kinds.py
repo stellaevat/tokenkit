@@ -207,6 +207,28 @@ class TinyLlamaModelKind(BaseModelKind):
         }
 
 
+class MistralModelKind(BaseModelKind):
+    def __init__(self):
+        super().__init__()
+
+    @property
+    def special_tokens(self) -> List[str]:
+        return ["<s>", "</s>", "<unk>"]
+
+    @property
+    def replacements(self) -> Dict[str, Optional[List[str]]]:
+        return {
+            "<|<bos>|>": ["<s>"],
+            "<|<pad>|>": ["</s>"],
+            "<|<start_header>|>": None, # chat template exists but not supported for Mistral
+            "<|<end_header>|>": None,
+            "<|<eos>|>": ["</s>"],
+            "<|<eot>|>": ["</s>"],
+            "<|<system_name>|>": None,
+            "<|<user_name>|>": None,
+            "<|<assistant_name>|>": None,
+        }
+
 # Model kind registry
 def get_model_kind_cls(model_kind: str) -> BaseModelKind:
     return {
@@ -216,4 +238,5 @@ def get_model_kind_cls(model_kind: str) -> BaseModelKind:
         "Phi3": Phi3ModelKind(),
         "GPT2": GPT2ModelKind(),
         "TinyLlama": TinyLlamaModelKind(),
+        "Mistral": MistralModelKind(),
     }[model_kind]

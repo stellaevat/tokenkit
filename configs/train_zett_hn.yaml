@@ -38,6 +38,10 @@ eval:
   tokenizers:
     - tokenizer: openai-community/gpt2:source=GPT2:target=TinyLlama:conversion=manual_add_prefix_space
       name: gpt2
+    - tokenizer: mistralai/Mistral-Small-3.1-24B-Base-2503:source=Mistral:target=TinyLlama:conversion=manual_add_prefix_space
+      name: mistral
+    - tokenizer: meta-llama/Llama-3.2-3B:source=Llama3:target=TinyLlama:conversion=manual_add_prefix_space
+      name: llama3
 
 data:
   batch_size: 128

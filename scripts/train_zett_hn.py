@@ -1119,7 +1119,15 @@ def main(args: TrainZettHnArgs):
         )
 
         if jax.process_index() == 0:
-            batch = track_metrics(next(current_diter))
+            try:
+                batch = track_metrics(next(current_diter))
+            except StopIteration:
+                if step < args.identity_steps:
+                    identity_diter = iter(identity_train_dataloader)
+                    batch = track_metrics(next(identity_diter))
+                else:
+                    diter = iter(train_dataloader)
+                    batch = track_metrics(next(diter))
         else:
             batch = current_first_batch
 

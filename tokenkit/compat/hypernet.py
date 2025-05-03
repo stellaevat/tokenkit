@@ -500,7 +500,7 @@ class Hypernet(nn.Module):
 
         if predicted_embeddings_out is not None:
             predicted_embeddings = jnp.concatenate(
-                [predicted_embeddings, predicted_embeddings_out[:, None, :]], axis=2
+                [predicted_embeddings, predicted_embeddings_out[:, None, :]], axis=1
             )
 
         return predicted_embeddings

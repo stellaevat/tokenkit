@@ -55,7 +55,7 @@ class TokenizerSamplerCollator:
         hn_tokenizer,
         collator_args,
         batch_size=None,
-        tokenizer_name=None,
+        fixed_tokenizer=None,
         initial_texts=None,
         inner_collator=None,
         is_validation=False,
@@ -64,7 +64,7 @@ class TokenizerSamplerCollator:
         original_tokenizer=None,
         space_mask_mode="space+tab+newline+special",
     ):
-        self.tokenizer_name = tokenizer_name
+        self.fixed_tokenizer = fixed_tokenizer
         self.hn_tokenizer = hn_tokenizer
         self.collator_args = collator_args
         self.batch_size = batch_size
@@ -78,10 +78,23 @@ class TokenizerSamplerCollator:
         if self.with_consistent_whitespace:
             raise NotImplementedError("TokenizerSamplerCollator does not support `with_consistent_whitespace` at the moment.")
 
-        assert (tokenizer_name is None) == self.collator_args.do_tokenizer_sampling
+        assert (fixed_tokenizer is None) == self.collator_args.do_tokenizer_sampling
 
         if not collator_args.do_tokenizer_sampling:
-            raise NotImplementedError()
+            if hn_tokenizer.get_vocab() != fixed_tokenizer.get_vocab():
+                raise NotImplementedError()
+
+            self.original_length = len(fixed_tokenizer)
+            self.surface_forms = np.arange(len(fixed_tokenizer))[:, None]
+            self.scores = np.zeros(len(fixed_tokenizer))
+
+            all_tokens = fixed_tokenizer.convert_ids_to_tokens(range(len(fixed_tokenizer)))
+            self.byte_lengths = np.array([len(x) for x in all_tokens])
+            self.inv_ids_to_embed = (
+                np.zeros(len(fixed_tokenizer), dtype=np.int32)
+                if self.collator_args.n_token_subsample is not None
+                else None
+            )
         else:
             self.inv_ids_to_embed = (
                 np.zeros(self.collator_args.tokenizer_sample_max + 256, dtype=np.int32)
@@ -544,6 +557,14 @@ class TokenizerSamplerCollator:
         encodings["lang_index"] = np.array(0) # TODO: fix
 
         return encodings
+
+    def get_identity_batch_pspecs(self):
+        return {
+            "target_surface_forms": P("model", None),
+            "target_priors": P("model"),
+            "ids_to_embed": P("model"),
+            "lang_index": P(),
+        }
 
     def get_batch_pspecs(self):
         batch_specs = {

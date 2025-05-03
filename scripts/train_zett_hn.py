@@ -359,7 +359,9 @@ def main(args: TrainZettHnArgs):
     if args.compat:
         import tokenkit.compat.hypernet
 
+        del teacher_config.mesh
         hn_config = copy.deepcopy(teacher_config)
+        teacher_config.mesh = mesh
         # write defaults
         for key, value in asdict(tokenkit.compat.hypernet.HypernetArgs()).items():
             setattr(hn_config, key, value)
@@ -551,6 +553,12 @@ def main(args: TrainZettHnArgs):
         grad_fn = jax.value_and_grad(compute_loss, argnums=1)
         loss, grad = grad_fn(state.params, trainable_params)
 
+        grad = jax.tree.map(
+            lambda g, p: g if g is not None else jnp.zeros_like(p),
+            grad,
+            state.params,
+            is_leaf=lambda x: x is None,
+        )
         new_state = state.apply_gradients(grads=grad)
 
         metrics = {
@@ -960,7 +968,7 @@ def main(args: TrainZettHnArgs):
         identity_collator = collators.TokenizerSamplerCollator(
             hn_tokenizer,
             identity_collator_args,
-            tokenizer_name=hn_tokenizer.name_or_path,
+            fixed_tokenizer=original_tokenizer,
             with_consistent_whitespace=False,
         )
 
@@ -972,7 +980,7 @@ def main(args: TrainZettHnArgs):
             collate_fn=partial(identity_collator, for_identity_step=True),
         )
         identity_batch_shardings = jax.tree.map(
-            lambda x: NamedSharding(mesh, x), identity_collator.get_batch_pspecs()
+            lambda x: NamedSharding(mesh, x), identity_collator.get_identity_batch_pspecs()
         )
     else:
         identity_train_dataloader = None

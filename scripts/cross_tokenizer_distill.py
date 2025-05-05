@@ -1050,7 +1050,7 @@ def main(args: CrossTokenizerDistillArgs):
                 )
 
             last_layer_grad = jax.tree.map(
-                lambda x: jnp.sum(x * state.gradnorm_state["weights"], axis=0),
+                lambda x: jnp.sum(x * jnp.expand_dims(state.gradnorm_state["weights"], axis=tuple(range(1, x.ndim))), axis=0),
                 last_layer_grads,
             )
 

@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import torch
-from flax import traverse_util
+from flax import traverse_util, struct
 from flax.training import common_utils, train_state
 from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding
@@ -89,6 +89,8 @@ class CrossTokenizerDistillArgs:
     loss_weights: list[float] | None = None
     loss_schedules: list[str] | None = None
     multitask_aggregation_fn: str | None = None
+    gradnorm_alpha: float = 0.12
+    gradnorm_lr: float = 2.5e-2
     bce_temp: float = 100.0
     distill_chunk_sizes: list[int] = field(default_factory=lambda: [1])
     alm_diff_fn: str = "binary_ce"
@@ -121,6 +123,8 @@ class TrainState(train_state.TrainState):
     train_mask: Any
     space_mask_teacher: jnp.ndarray
     space_mask_new: jnp.ndarray
+    gradnorm_state: Any = struct.field(pytree_node=True)
+    gradnorm_tx: optax.GradientTransformation | None = struct.field(pytree_node=False)
 
 
 def _unimplemented_apply_fn(*args, **kwargs):
@@ -319,6 +323,21 @@ def get_state(
         train_mask,
     )
 
+    if args.multitask_aggregation_fn == "gradnorm":
+        gradnorm_opt = optax.adamw(
+            learning_rate=args.gradnorm_lr,
+        )
+
+        gradnorm_state = {
+            "weights": jnp.ones(len(args.losses)),
+            "l0": jnp.empty(len(args.losses)),
+            "opt_state": gradnorm_opt.init(jnp.ones(len(args.losses))),
+        }
+        gradnorm_tx = gradnorm_opt
+    else:
+        gradnorm_state = None
+        gradnorm_tx = None
+
     def _jit_init_state(params):
         return TrainState.create(
             apply_fn=_unimplemented_apply_fn,
@@ -329,6 +348,8 @@ def get_state(
             train_mask=train_mask,
             space_mask_teacher=space_mask_teacher,
             space_mask_new=space_mask_new,
+            gradnorm_state=gradnorm_state,
+            gradnorm_tx=gradnorm_tx,
         )
 
     state_shape = jax.eval_shape(_jit_init_state, params)
@@ -996,6 +1017,79 @@ def main(args: CrossTokenizerDistillArgs):
                 ]
                 scalar_report[f"loss/{loss_name}_approx_loss_weight"] = (
                     approx_loss_weights[loss_idx]
+                )
+
+            grad = jax.tree.map(
+                lambda x, y: x if x is not None else y,
+                last_layer_grad,
+                non_last_layer_grad,
+                is_leaf=lambda x: x is None,
+            )
+        elif args.multitask_aggregation_fn == "gradnorm":
+            def compute_loss_with_aux_value(*args):
+                loss_values, scalar_report = compute_loss(*args)
+                return loss_values, (scalar_report, loss_values)
+
+            jac_fn = jax.jacrev(compute_loss_with_aux_value, has_aux=True, argnums=1)
+            (last_layer_grads, (_, loss_values)) = jac_fn(
+                state.params, last_layer_trainable_params, trainable_params
+            )
+            approx_grad_norm = multitask.compute_global_grad_norm(last_layer_grads)
+
+            l0 = jax.lax.cond(
+                state.step == 0,
+                lambda: jax.lax.stop_gradient(loss_values),
+                lambda: state.gradnorm_state["l0"],
+            )
+
+            def compute_loss_weighted(*pargs):
+                loss_values, scalar_report = compute_loss(*pargs)
+                return (
+                    jnp.sum(loss_values * state.gradnorm_state["weights"]),
+                    scalar_report,
+                )
+
+            grad_fn = jax.value_and_grad(compute_loss_weighted, has_aux=True, argnums=2)
+            (loss, scalar_report), non_last_layer_grad = grad_fn(
+                state.params, last_layer_trainable_params, trainable_params
+            )
+
+            loss_ratio = loss_values / l0
+            rt = loss_ratio / loss_ratio.mean()
+
+            def compute_gradnorm_loss(w, approx_grad_norm):
+                approx_grad_norm = jax.tree.map(lambda x, y: x * y, approx_grad_norm, w)
+
+                gw_avg = approx_grad_norm.mean()
+                constant = (gw_avg * rt ** args.gradnorm_alpha)
+                return jnp.abs(approx_grad_norm - constant).mean()
+
+            weight_grad = jax.grad(compute_gradnorm_loss, argnums=0)(
+                state.gradnorm_state["weights"], approx_grad_norm
+            )
+            grad_norm_updates, grad_norm_new_opt_state = state.gradnorm_tx.update(
+                weight_grad, state.gradnorm_state["opt_state"], state.gradnorm_state["weights"]
+            )
+            new_weights = optax.apply_updates(state.gradnorm_state["weights"], grad_norm_updates)
+            new_weights = new_weights / new_weights.sum() * len(args.losses)
+            state = state.replace(gradnorm_state={
+                "weights": new_weights,
+                "opt_state": grad_norm_new_opt_state,
+                "l0": l0,
+            })
+
+            for loss_idx, loss_name in enumerate(args.losses):
+                scalar_report[f"loss/{loss_name}_approx_grad_norm"] = approx_grad_norm[
+                    loss_idx
+                ]
+                scalar_report[f"loss/{loss_name}_weight"] = (
+                    new_weights[loss_idx]
+                )
+                scalar_report[f"loss/{loss_name}_l0"] = (
+                    l0[loss_idx]
+                )
+                scalar_report[f"loss/{loss_name}_loss_ratio"] = (
+                    loss_ratio[loss_idx]
                 )
 
             grad = jax.tree.map(

@@ -1049,6 +1049,11 @@ def main(args: CrossTokenizerDistillArgs):
                     scalar_report,
                 )
 
+            last_layer_grad = jax.tree.map(
+                lambda x: jnp.sum(x * state.gradnorm_state["weights"], axis=0),
+                last_layer_grads,
+            )
+
             grad_fn = jax.value_and_grad(compute_loss_weighted, has_aux=True, argnums=2)
             (loss, scalar_report), non_last_layer_grad = grad_fn(
                 state.params, last_layer_trainable_params, trainable_params

@@ -177,16 +177,29 @@ def main(args: EvalLockstepScriptArgs) -> None:
 
     # static combine fn for the moment
     def combine_fn(hidden_states, logits, combine_params, output_embeddings):
-        probs = None
-        for model_logits in logits:
-            model_probs = jax.nn.softmax(model_logits, axis=-1)
-            if probs is None:
-                probs = model_probs
-            else:
-                probs += model_probs
+        if args.combine_strategy == "mean_prob":
+            aggregated_probs = None
+            for model_logits in logits:
+                model_probs = jax.nn.softmax(model_logits, axis=-1)
+                if aggregated_probs is None:
+                    aggregated_probs = model_probs
+                else:
+                    aggregated_probs += model_probs
 
-        probs /= len(logits)
-        return jnp.log(probs)
+            aggregated_probs /= len(logits)
+            return jnp.log(aggregated_probs)
+        elif args.combine_strategy == "mean_logits":
+            aggregated_logits = None
+            for model_logits in logits:
+                if aggregated_logits is None:
+                    aggregated_logits = model_logits
+                else:
+                    aggregated_logits += model_logits
+
+            aggregated_logits /= len(logits)
+            return aggregated_logits
+        else:
+            raise ValueError(f"Unknown combine strategy: {args.combine_strategy}")
 
     results = evaluate_lockstep(
         models=all_models,

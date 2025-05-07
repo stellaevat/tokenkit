@@ -7,16 +7,18 @@ python3 scripts/eval_lockstep.py models=llama_qwen +eval.limit=100
 import logging
 from pathlib import Path
 from pprint import pformat, pprint
-
+from dataclasses import dataclass, asdict
+import os
+import yaml
 import datasets
-import hydra
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils
-from omegaconf import DictConfig, OmegaConf
-from transformers import AutoConfig, FlaxAutoModelForCausalLM
+from transformers import FlaxAutoModelForCausalLM
 
+from tokenkit import parse_args
+from tokenkit.hf import get_config
 from tokenkit.byteify import load_byteify_tokenizer
 from tokenkit.eval import evaluate_lockstep
 from tokenkit.models import param, sharding
@@ -26,6 +28,16 @@ logger = logging.getLogger(__name__)
 datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = (
     True  # careful about this, required for lm_eval
 )
+
+@dataclass
+class EvalLockstepScriptArgs:
+    combine_strategy: str
+    models: list[parse_args.ModelArgs]
+    eval: parse_args.EvalArgs
+    baseline_mined_mapping_paths: list[str] | None = None
+    output: str | None = None
+    pad_to_multiple_of: int = 128
+    use_cpu: bool = False
 
 
 def pad_embeddings(embeddings, tokenizer):
@@ -46,18 +58,25 @@ def pad_embeddings(embeddings, tokenizer):
     )
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="eval_lockstep")
-def my_app(args: DictConfig) -> None:
-    logger.info(pformat(OmegaConf.to_object(args)))
+def main(args: EvalLockstepScriptArgs) -> None:
+    logger.info(pformat(args))
 
-    eval_kwargs = OmegaConf.to_object(args.eval)
+    eval_kwargs = asdict(args.eval)
 
-    if eval_kwargs["output"] is not None:
-        output_dir = Path(eval_kwargs["output"])
+    if args.output is not None:
+        output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
-        OmegaConf.save(config=args, f=output_dir / "args.yaml", resolve=True)
 
-    mesh = sharding.get_mesh()
+        with open(output_dir / "args.yaml", "w") as f:
+            yaml.dump(asdict(args), f)
+    else:
+        output_dir = None
+
+    if args.use_cpu:
+        jax.config.update("jax_default_device", jax.devices("cpu")[0])
+        mesh = sharding.get_mesh(devices=jax.devices("cpu"))
+    else:
+        mesh = sharding.get_mesh()
 
     all_models = []
     all_configs = []
@@ -68,13 +87,10 @@ def my_app(args: DictConfig) -> None:
     eval_kwargs.pop("add_bos")
     all_add_bos = []
 
-    for model_args in args.models:
-        model_kwargs = OmegaConf.to_object(model_args)
-
+    for model_idx, model_kwargs in enumerate(args.models):
         print("Loading model...")
-        pprint(model_kwargs)
 
-        config = AutoConfig.from_pretrained(model_args.pretrained_model_name_or_path)
+        config = get_config(model_kwargs["pretrained_model_name_or_path"])
 
         config.max_length = eval_kwargs["lengths"][-1]
         config.mesh = mesh
@@ -83,7 +99,7 @@ def my_app(args: DictConfig) -> None:
 
         model = FlaxAutoModelForCausalLM.from_config(config, _do_init=False)
         params = param.load_params(
-            pretrained_model_name_or_path=model_args.pretrained_model_name_or_path
+            pretrained_model_name_or_path=model_kwargs["pretrained_model_name_or_path"]
         )
 
         input_embeddings = param.get(
@@ -144,12 +160,20 @@ def my_app(args: DictConfig) -> None:
 
         multihost_utils.sync_global_devices("loaded weights")
 
+        if args.baseline_mined_mapping_paths is not None:
+            if args.baseline_mined_mapping_paths[model_idx] is not None:
+                config.mined_mapping = np.load(
+                    Path(args.baseline_mined_mapping_paths[model_idx]) / "mined_mapping.npy"
+                )
+            else:
+                config.mined_mapping = None
+
         all_models.append(model)
         all_configs.append(config)
         all_params.append(params)
         all_tokenizers.append(tokenizer)
         all_logit_masks.append(logit_mask)
-        all_add_bos.append(model_args.add_bos)
+        all_add_bos.append(model_kwargs["add_bos"])
 
     # static combine fn for the moment
     def combine_fn(hidden_states, logits, combine_params, output_embeddings):
@@ -173,6 +197,8 @@ def my_app(args: DictConfig) -> None:
         add_bos=all_add_bos,
         combine_fn=combine_fn,
         combine_params={},
+        jaxlm_kwargs={"precompile": not args.use_cpu},
+        output=output_dir,
         **eval_kwargs,
     )
 
@@ -181,4 +207,5 @@ def my_app(args: DictConfig) -> None:
 
 
 if __name__ == "__main__":
-    my_app()
+    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+    main(parse_args.parse_args(EvalLockstepScriptArgs))

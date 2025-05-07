@@ -440,37 +440,72 @@ class LockstepJaxLM(lm_eval.api.model.LM):
 
         self.max_batch_size = self.tokens_per_batch // self.lengths[0]
 
-        regular_token_intersection = set.intersection(
-            *[set(x.get_vocab().keys()) for x in tokenizers]
-        )
-        for tokenizer in tokenizers:
-            regular_token_intersection -= set(tokenizer.all_special_tokens)
-        regular_token_intersection = sorted(regular_token_intersection)
+        if not hasattr(configs[0], "mined_mapping"):
+            shared_vocab_size = min(config.vocab_size for config in configs)
 
-        self.unified_tokens = [
-            regular_token_intersection
-            + [tokenizer.model_kind_cls.replacements["<|<eot>|>"][0]]
-            for tokenizer in self.tokenizers
-        ]
-        min_vocab_size = min(config.vocab_size for config in configs)
-
-        self.unified_indices = [
-            np.pad(
-                np.array(
-                    tokenizer.convert_tokens_to_ids(unified_tokens), dtype=np.int32
-                ),
-                (0, min_vocab_size - len(unified_tokens)),
-                mode="constant",
-                constant_values=0,
+            regular_token_intersection = set.intersection(
+                *[set(x.get_vocab().keys()) for x in tokenizers]
             )
-            for tokenizer, unified_tokens in zip(self.tokenizers, self.unified_tokens)
-        ]
-        self.unified_indices_mask = np.concatenate(
-            [
-                np.ones(len(self.unified_tokens[0]), dtype=bool),
-                np.zeros(min_vocab_size - len(self.unified_tokens[0]), dtype=bool),
+            for tokenizer in tokenizers:
+                regular_token_intersection -= set(tokenizer.all_special_tokens)
+            regular_token_intersection = sorted(regular_token_intersection)
+
+            self.unified_tokens = [
+                regular_token_intersection
+                + [tokenizer.model_kind_cls.replacements["<|<eot>|>"][0]]
+                for tokenizer in self.tokenizers
             ]
-        )
+            
+
+            self.unified_indices = [
+                np.pad(
+                    np.array(
+                        tokenizer.convert_tokens_to_ids(unified_tokens), dtype=np.int32
+                    ),
+                    (0, shared_vocab_size - len(unified_tokens)),
+                    mode="constant",
+                    constant_values=0,
+                )
+                for tokenizer, unified_tokens in zip(self.tokenizers, self.unified_tokens)
+            ]
+
+            self.unified_indices_mask = np.concatenate(
+                [
+                    np.ones(len(self.unified_tokens[0]), dtype=bool),
+                    np.zeros(shared_vocab_size - len(self.unified_tokens[0]), dtype=bool),
+                ]
+            )
+        else:
+            shared_vocab_size = configs[0].vocab_size
+            pivot_tokenizer = tokenizers[0]
+
+            regular_pivot_tokens = sorted(set(pivot_tokenizer.get_vocab().keys()) - set(pivot_tokenizer.model_kind_cls.special_tokens))
+            regular_pivot_indices = pivot_tokenizer.convert_tokens_to_ids(regular_pivot_tokens)
+            self.unified_indices = [
+                np.pad(
+                    regular_pivot_indices + [pivot_tokenizer.convert_tokens_to_ids(pivot_tokenizer.model_kind_cls.replacements["<|<eot>|>"][0])],
+                    (0, shared_vocab_size - len(regular_pivot_indices) - 1),
+                    mode="constant",
+                    constant_values=0,
+                )
+            ]
+
+            for extra_idx, extra_tokenizer in enumerate(tokenizers[1:]):
+                extra_indices = [configs[extra_idx + 1].mined_mapping[i] for i in regular_pivot_indices]
+                self.unified_indices.append(np.pad(
+                    extra_indices + [extra_tokenizer.convert_tokens_to_ids(extra_tokenizer.model_kind_cls.replacements["<|<eot>|>"][0])],
+                    (0, shared_vocab_size - len(extra_indices) - 1),
+                    mode="constant",
+                    constant_values=0,
+                ))
+
+            self.unified_indices_mask = np.concatenate(
+                [
+                    np.ones(len(regular_pivot_tokens) + 1, dtype=bool),
+                    np.zeros(shared_vocab_size - len(regular_pivot_tokens) - 1, dtype=bool),
+                ]
+            )
+
         self.inv_unified_indices = []
         for i in range(len(self.unified_indices)):
             current_inv_unified_indices = np.full(
@@ -795,12 +830,7 @@ class LockstepJaxLM(lm_eval.api.model.LM):
                 lengths=[self.lengths[-1]],
             )
 
-            output_tokens = lockstep_generator.generate(
-                prompts,
-                weights=np.full(
-                    (len(prompts), len(self.models)), 1.0 / len(self.models)
-                ),
-            )
+            output_tokens = lockstep_generator.generate(prompts)
 
             for i, config in enumerate(self.configs):
                 config.max_length = prev_max_lengths[i]

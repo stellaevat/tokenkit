@@ -77,7 +77,9 @@ class Generator:
     ):
         position_ids = (jnp.cumsum(attention_mask, axis=1) - 1) * attention_mask
 
-        inputs_embeds = self.compute_inputs_embeds(params, input_ids, expanded_input_ids, expand_input_ids_matrix)
+        inputs_embeds = self.compute_inputs_embeds(
+            params, input_ids, expanded_input_ids, expand_input_ids_matrix
+        )
 
         out = model_fn(
             input_ids=None,
@@ -137,7 +139,7 @@ class Generator:
                 utils.get_expand_input_ids_matrix(
                     tokenizer, expand_input_ids_vocab, module=np
                 ),
-                self.expand_input_ids_matrix_shardings
+                self.expand_input_ids_matrix_shardings,
             )
             self.expand_input_ids_dict = utils.get_expand_input_ids_dict(
                 tokenizer, expand_input_ids_vocab
@@ -324,7 +326,12 @@ class Generator:
         )
 
     def compute_inputs_embeds(
-        self, params, input_ids, expanded_input_ids=None, expand_input_ids_matrix=None, last_only=False
+        self,
+        params,
+        input_ids,
+        expanded_input_ids=None,
+        expand_input_ids_matrix=None,
+        last_only=False,
     ):
         embedding_matrix = param.get(
             params,
@@ -356,7 +363,12 @@ class Generator:
         self,
         state: State,
     ):
-        inputs_embeds = self.compute_inputs_embeds(state.params, state.running_token, expand_input_ids_matrix=state.expand_input_ids_matrix, last_only=True)
+        inputs_embeds = self.compute_inputs_embeds(
+            state.params,
+            state.running_token,
+            expand_input_ids_matrix=state.expand_input_ids_matrix,
+            last_only=True,
+        )
 
         out = self.generate_fn(
             input_ids=None,
@@ -755,13 +767,6 @@ class LockstepGenerator:
         lengths=[4096],
         pad_to_multiple_of=128,
     ):
-        regular_token_intersection = set.intersection(
-            *[set(x.get_vocab().keys()) for x in all_tokenizers]
-        )
-        for tokenizer in all_tokenizers:
-            regular_token_intersection -= set(tokenizer.all_special_tokens)
-        regular_token_intersection = sorted(regular_token_intersection)
-
         self.precompile = precompile
 
         self.generators = [
@@ -785,34 +790,139 @@ class LockstepGenerator:
         ]
         self.sampling_config = sampling_config
 
-        # disallow next tokens besides eot
-        self.unified_tokens = [
-            regular_token_intersection + [generator.replacements["<|<eot>|>"][0]]
-            for generator in self.generators
-        ]
+        if not hasattr(all_configs[0], "mined_mapping"):
+            regular_token_intersection = set.intersection(
+                *[set(x.get_vocab().keys()) for x in all_tokenizers]
+            )
+            for tokenizer in all_tokenizers:
+                regular_token_intersection -= set(tokenizer.all_special_tokens)
+            regular_token_intersection = sorted(regular_token_intersection)
 
-        min_vocab_size = min(config.vocab_size for config in all_configs)
+            shared_vocab_size = min(config.vocab_size for config in all_configs)
 
-        self.unified_indices = [
-            sharding.to_global_array(
-                np.pad(
-                    np.array(
-                        tokenizer.convert_tokens_to_ids(unified_tokens), dtype=np.int32
+            regular_token_intersection = set.intersection(
+                *[set(x.get_vocab().keys()) for x in all_tokenizers]
+            )
+            for tokenizer in all_tokenizers:
+                regular_token_intersection -= set(tokenizer.all_special_tokens)
+            regular_token_intersection = sorted(regular_token_intersection)
+
+            self.unified_tokens = [
+                regular_token_intersection
+                + [tokenizer.model_kind_cls.replacements["<|<eot>|>"][0]]
+                for tokenizer in all_tokenizers
+            ]
+
+            self.unified_indices = [
+                sharding.to_global_array(
+                    np.pad(
+                        np.array(
+                            tokenizer.convert_tokens_to_ids(unified_tokens),
+                            dtype=np.int32,
+                        ),
+                        (0, shared_vocab_size - len(unified_tokens)),
+                        mode="constant",
+                        constant_values=0,
                     ),
-                    ((0, min_vocab_size - len(unified_tokens))),
-                    mode="constant",
-                    constant_values=0,
+                    NamedSharding(mesh, P()),
+                )
+                for tokenizer, unified_tokens in zip(
+                    all_tokenizers, self.unified_tokens
+                )
+            ]
+
+            self.unified_indices_mask = sharding.to_global_array(
+                np.concatenate(
+                    [
+                        np.ones(len(self.unified_tokens[0]), dtype=bool),
+                        np.zeros(
+                            shared_vocab_size - len(self.unified_tokens[0]), dtype=bool
+                        ),
+                    ]
                 ),
                 NamedSharding(mesh, P()),
             )
-            for tokenizer, unified_tokens in zip(all_tokenizers, self.unified_tokens)
-        ]
-        self.unified_indices_mask = np.concatenate(
-            [
-                np.ones(len(self.unified_tokens[0]), dtype=bool),
-                np.zeros(min_vocab_size - len(self.unified_tokens[0]), dtype=bool),
+        else:
+            shared_vocab_size = all_configs[0].vocab_size
+            pivot_tokenizer = all_tokenizers[0]
+
+            regular_pivot_tokens = sorted(
+                set(pivot_tokenizer.get_vocab().keys())
+                - set(pivot_tokenizer.model_kind_cls.special_tokens)
+            )
+            regular_pivot_indices = pivot_tokenizer.convert_tokens_to_ids(
+                regular_pivot_tokens
+            )
+            self.unified_indices = [
+                sharding.to_global_array(
+                    np.pad(
+                        regular_pivot_indices
+                        + [
+                            pivot_tokenizer.convert_tokens_to_ids(
+                                pivot_tokenizer.model_kind_cls.replacements[
+                                    "<|<eot>|>"
+                                ][0]
+                            )
+                        ],
+                        (0, shared_vocab_size - len(regular_pivot_indices) - 1),
+                        mode="constant",
+                        constant_values=0,
+                    ),
+                    NamedSharding(mesh, P()),
+                )
             ]
-        )
+
+            for extra_idx, extra_tokenizer in enumerate(all_tokenizers[1:]):
+                extra_indices = [
+                    all_configs[extra_idx + 1].mined_mapping[i]
+                    for i in regular_pivot_indices
+                ]
+                self.unified_indices.append(
+                    sharding.to_global_array(
+                        np.pad(
+                            extra_indices
+                            + [
+                                extra_tokenizer.convert_tokens_to_ids(
+                                    extra_tokenizer.model_kind_cls.replacements[
+                                        "<|<eot>|>"
+                                    ][0]
+                                )
+                            ],
+                            (0, shared_vocab_size - len(extra_indices) - 1),
+                            mode="constant",
+                            constant_values=0,
+                        ),
+                        NamedSharding(mesh, P()),
+                    )
+                )
+
+            self.unified_indices_mask = sharding.to_global_array(
+                np.concatenate(
+                    [
+                        np.ones(len(regular_pivot_tokens) + 1, dtype=bool),
+                        np.zeros(
+                            shared_vocab_size - len(regular_pivot_tokens) - 1,
+                            dtype=bool,
+                        ),
+                    ]
+                ),
+                NamedSharding(mesh, P()),
+            )
+
+        self.inv_unified_indices = []
+        for i in range(len(self.unified_indices)):
+            current_inv_unified_indices = np.full(
+                (len(all_tokenizers[i]),), fill_value=-1, dtype=np.int32
+            )
+            current_inv_unified_indices[self.unified_indices[i]] = np.arange(
+                len(self.unified_indices[i])
+            )
+            self.inv_unified_indices.append(
+                sharding.to_global_array(
+                    current_inv_unified_indices,
+                    NamedSharding(mesh, P()),
+                )
+            )
 
         self.batch_size = batch_size
         self.max_new_tokens = max_new_tokens
@@ -913,10 +1023,17 @@ class LockstepGenerator:
             is_sent_finished = is_sent_finished | (
                 next_token_i == self.generators[i].eos_token_id
             )
-
             next_token_i = next_token_i[:, None]
+            next_running_token_i = jnp.concatenate(
+                [
+                    state.states[i].running_token[:, 1:],
+                    next_token_i,
+                ],
+                axis=1,
+            )
+
             next_states[i] = next_states[i].replace(
-                running_token=next_token_i,
+                running_token=next_running_token_i,
                 sequences=lax.dynamic_update_slice(
                     next_states[i].sequences,
                     next_token_i,
@@ -1000,13 +1117,10 @@ class LockstepGenerator:
             for prompt in tqdm(
                 prompts, desc="Encoding prompts...", disable=not verbose
             ):
-                prompt_tokens = [
-                    generator.vocab[x]
-                    for x in utils.encode_prompt(prompt, generator.tokenizer)[0]
-                ]
+                prompt_tokens = utils.encode_prompt(prompt, generator.tokenizer)[0]
 
                 all_prefill_tokens[i].append(prompt_tokens[:-1])
-                all_running_tokens[i].append(prompt_tokens[-1:])
+                all_running_tokens[i].append(prompt_tokens[-EXPAND_INPUT_IDS_MAX_LENGTH:])
 
         # longest prompts first to overestimate (rather than underestimate) time it takes to generate
         # inconsequential which model we use for permutation_indices
@@ -1097,10 +1211,11 @@ class LockstepGenerator:
             caches = [
                 compiled_prefill_fns[model_idx][padded_prefill_length](
                     prefill_input_ids[model_idx],
+                    np.zeros_like(prefill_input_ids[model_idx]), # expand input ids not supported here
                     attention_mask[model_idx],
                     self.generators[model_idx].params,
                     init_caches[model_idx],
-                    None, # expand input ids matrix not supported here
+                    None, # expand input ids not supported here
                 )[0]
                 for model_idx in range(len(self.generators))
             ]

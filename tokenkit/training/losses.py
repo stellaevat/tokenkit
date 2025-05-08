@@ -1045,6 +1045,9 @@ def compute_baseline_mined_loss(mined_mapping, args, loss_args):
         reduction="none",
     )
 
+    loss_args.scalar_report["mined_one_to_one_mask_sum"] = one_to_one_mask.sum()
+    loss_args.scalar_report["mined_onehot_mask_sum"] = onehot_mask.sum()
+
     mined_kl_loss = (
         (elementwise_mined_teacher_kl_loss * one_to_one_mask).sum()
         + (elementwise_onehot_kl_loss * onehot_mask).sum()

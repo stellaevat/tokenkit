@@ -1,3 +1,5 @@
+export JAX_TRACEBACK_FILTERING="off"
+
 NAME=gemma2_distill_from_openmath2-llama
 python3 scripts/cross_tokenizer_distill.py \
     --config=configs/math_cross_tokenizer_distill.yaml \

@@ -1,3 +1,12 @@
+USER=set56
+CACHE_DIR=/home/$USER/.cache/huggingface
+CACHE_DIR_NEW=/home/$USER/rds/hpc-work/.cache/huggingface
+
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/miniforge3/lib
+export HF_HOME=$CACHE_DIR_NEW
+export TRANSFORMERS_CACHE=$CACHE_DIR_NEW
+cp $CACHE_DIR/token $CACHE_DIR_NEW/token
+
 export JAX_TRACEBACK_FILTERING="off"
 
 NAME=llama3_to_qwen2_tokenizer

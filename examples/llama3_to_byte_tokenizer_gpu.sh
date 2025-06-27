@@ -1,3 +1,5 @@
+export JAX_TRACEBACK_FILTERING="off"
+
 NAME=llama3_to_byte
 python3 scripts/cross_tokenizer_distill.py \
     --config=configs/cross_tokenizer_distill.yaml \

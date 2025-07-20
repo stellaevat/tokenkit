@@ -1,3 +1,83 @@
+# Current Fork
+
+<small>Stella Eva Tsiapali</small>
+
+## Fork Instructions
+
+### Installation
+
+- Create virtual environment with Python <=3.10, then proceed according to TPU/GPU instructions:
+
+<details>
+<summary><strong>TPU</strong></summary>
+
+```bash
+# Clone the repository & install the library
+git clone https://github.com/bminixhofer/tokenkit
+
+# Create a new virtual environment
+# Currently, requires Python <=3.10, but we are working on this: https://github.com/bminixhofer/tokenkit/issues/4
+python -m venv tokenkit_env
+. tokenkit_env/bin/activate
+
+# Install torch & jax 0.5.0
+pip install torch jax[tpu]==0.5.0 -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+
+# Currently, tokenkit relies on a fork of `lm_eval`
+pip install git+https://github.com/bminixhofer/lm-evaluation-harness
+
+# Install the library and the remaining dependencies
+pip install -r requirements.txt
+pip install -e .
+# You can ignore warnings from the command below, see https://github.com/bminixhofer/tokenkit/issues/4
+pip install paxml==1.4.0 praxis==1.4.0 --no-deps
+```
+</details>
+
+<details>
+<summary><strong>GPU</strong></summary>
+
+```bash
+# Clone the repository & install the library
+git clone https://github.com/bminixhofer/tokenkit
+
+# Create a new virtual environment
+# Currently, requires Python <=3.10, but we are working on this: https://github.com/bminixhofer/tokenkit/issues/4
+python -m venv tokenkit_env
+. tokenkit_env/bin/activate
+
+# Install torch & jax 0.5.0
+# you may need to substitute cuda12 with the version of CUDA you are using:
+pip install torch jax[cuda12]==0.5.0
+
+# Currently, tokenkit relies on a fork of `lm_eval`
+pip install git+https://github.com/bminixhofer/lm-evaluation-harness
+
+# Install the library and the remaining dependencies
+pip install -r requirements.txt
+pip install -e .
+# You can ignore warnings from the command below, see https://github.com/bminixhofer/tokenkit/issues/4
+pip install paxml==1.4.0 praxis==1.4.0 --no-deps
+```
+</details>
+
+- To train Llama3.2-3B-IT -> Qwen2:
+```bash
+bash examples/llama3_to_qwen2_tokenizer_gpu.sh
+```
+
+- To evaluate the trained model replace model and tokenizer name in:
+```python
+python3 scripts/eval.py \
+  model.pretrained_model_name_or_path=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer\' \
+  model.tokenizer_name=\'benjamin/Gemma2-2B-IT-with-Qwen2-Tokenizer:source=Gemma2:conversion=prebyteified\' \
+  eval.tasks=[mmlu] \
+```
+
+
+| For more details, what follows is the original README file.       |
+|-------------------------------------------------------------------|
+
 <h1 align="center">tokenkit🔁</h1>
 <h3 align="center">Tokenization Transfer for LLMs</h3>
 

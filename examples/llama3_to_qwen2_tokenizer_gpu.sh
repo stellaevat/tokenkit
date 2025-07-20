@@ -1,4 +1,6 @@
 export JAX_TRACEBACK_FILTERING="off"
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"/home/set56/miniforge3/envs/tokenkit/lib"
 
 NAME=llama3_to_qwen2_tokenizer
 python3 -m scripts.cross_tokenizer_distill \
@@ -19,10 +21,10 @@ python3 -m scripts.cross_tokenizer_distill \
     save_interval=1000 \
     data.batch_size=64 \
     optimizer.grad_acc_steps=4 \
-    data.num_workers=16 \
+    data.num_workers=0 \
     data.batch_size=64 \
     student.pretrained_model_name_or_path="benjamin/Llama-3.2-3B-Instruct-flax" \
     student.tokenizer_name=\'meta-llama/Llama-3.2-3B-Instruct:source=Llama3\' \
     target_tokenizer_name=\'Qwen/Qwen2.5-1.5B:source=Qwen2:target=Llama3\' \
-    num_workers=16 \
+    num_workers=0 \
     name=$NAME
